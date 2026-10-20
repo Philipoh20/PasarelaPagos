@@ -1,0 +1,44 @@
+================================================================================
+GUÍA RÁPIDA DE CÓDIGOS DE ESTADO HTTP
+================================================================================
+
+--- 1xx: RESPUESTAS INFORMATIVAS ---
+100 Continue            - El servidor recibió los encabezados; el cliente debe enviar el cuerpo.
+101 Switching Protocols - El servidor acepta cambiar de protocolo (ej. HTTP a WebSocket).
+102 Processing          - El servidor está procesando la petición pero aún no hay respuesta.
+
+--- 2xx: ÉXITO (SUCCESS) ---
+200 OK                  - Petición exitosa. Respuesta estándar para GET, PUT o POST.
+201 Created             - Petición exitosa y se ha creado un nuevo recurso.
+202 Accepted            - Petición aceptada para procesamiento, pero no se ha completado.E
+204 No Content          - Petición exitosa, pero no hay contenido que devolver.
+206 Partial Content     - El servidor envía solo parte del recurso (descargas pausables).
+
+--- 3xx: REDIRECCIONES (REDIRECTION) ---
+301 Moved Permanently   - El recurso se ha movido permanentemente a una nueva URL.
+302 Found               - El recurso se encuentra temporalmente en una nueva URL.
+304 Not Modified        - El recurso no ha cambiado; se puede usar la versión en caché.
+307 Temporary Redirect  - Redirección temporal manteniendo el método HTTP original.
+308 Permanent Redirect  - Redirección permanente manteniendo el método HTTP original.
+
+--- 4xx: ERRORES DEL CLIENTE (CLIENT ERRORS) ---
+400 Bad Request         - Sintaxis inválida o parámetros incorrectos en la petición.
+401 Unauthorized        - Se requiere autenticación previa para acceder.
+403 Forbidden           - Autenticado pero sin permisos suficientes para acceder.
+404 Not Found           - El recurso solicitado no existe en el servidor.
+405 Method Not Allowed  - El método HTTP (GET, POST, DELETE, etc.) no está permitido.
+408 Request Timeout     - El servidor agotó el tiempo de espera de la petición.
+409 Conflict            - Conflicto con el estado actual del recurso (ej. registro duplicado).
+410 Gone                - El recurso existía pero ha sido borrado permanentemente.
+413 Payload Too Large   - La petición es más grande de lo que el servidor puede procesar.
+415 Unsupported Media   - Tipo de contenido no soportado (ej. enviar XML cuando espera JSON).
+422 Unprocessable Entity- Error de validación semántica en los datos enviados.
+429 Too Many Requests   - Se ha superado el límite de peticiones (Rate Limiting).
+
+--- 5xx: ERRORES DEL SERVIDOR (SERVER ERRORS) ---
+500 Internal Server Error - Error no manejado en el código del servidor.
+502 Bad Gateway           - Respuesta inválida recibida del servidor ascendente.
+503 Service Unavailable   - Servidor no disponible por mantenimiento o sobrecarga.
+504 Gateway Timeout       - El servidor proxy agotó el tiempo esperando respuesta.
+505 HTTP Version Not Supp - La versión de HTTP usada no es soportada.
+================================================================================
