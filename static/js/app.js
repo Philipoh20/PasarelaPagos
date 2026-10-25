@@ -13,8 +13,15 @@ const AppState = {
   pagoSeleccionadoParaFacturar: null,
 };
 
+const THEME_STORAGE_KEY = 'pasarela_theme';
+const THEME_DARK = 'dark';
+
+document.documentElement.dataset.theme =
+  localStorage.getItem(THEME_STORAGE_KEY) === THEME_DARK ? THEME_DARK : 'light';
+
 document.addEventListener('DOMContentLoaded', async () => {
   configurarEventos();
+  configurarTema();
 
   if (AppState.token) {
     await verificarSesionActual();
@@ -25,6 +32,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await recargarTodo();
 });
+
+function configurarTema() {
+  const toggle = document.getElementById('theme-toggle');
+  toggle?.addEventListener('click', () => {
+    const theme = document.documentElement.dataset.theme === THEME_DARK ? 'light' : THEME_DARK;
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    actualizarControlTema(theme);
+  });
+
+  actualizarControlTema(document.documentElement.dataset.theme);
+}
+
+function actualizarControlTema(theme) {
+  const isDark = theme === THEME_DARK;
+  const toggle = document.getElementById('theme-toggle');
+  const icon = document.getElementById('theme-toggle-icon');
+  const label = document.getElementById('theme-toggle-label');
+
+  if (toggle) {
+    toggle.setAttribute('aria-label', `Activar modo ${isDark ? 'claro' : 'oscuro'}`);
+    toggle.setAttribute('aria-pressed', String(isDark));
+  }
+  if (icon) icon.textContent = isDark ? '☀' : '☾';
+  if (label) label.textContent = isDark ? 'MODO CLARO' : 'MODO OSCURO';
+}
 
 function configurarEventos() {
   // Pestañas de Navegación Principal
