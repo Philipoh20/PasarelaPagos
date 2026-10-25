@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PASARELA / FACTURACIÓN JSON</title>
+  <meta name="description" content="Sistema minimalista de pasarela de pagos, facturación en formato JSON y autenticación por roles.">
+  
+  <!-- Tipografía Editorial Minimalista: Space Grotesk & Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Barra Superior Minimalista -->
+  <header class="site-header">
+    <div class="header-ticker">
+      <span>API PASARELA DE PAGOS // V2.0</span>
+      <span>•</span>
+      <span>SISTEMA DE FACTURACIÓN JSON</span>
+      <span>•</span>
+      <span>CONTROL DE ACCESO POR ROLES (RBAC)</span>
+      <span class="ticker-status" id="sys-ticker-status">ESTADO: ACTIVO</span>
+    </div>
+
+    <div class="header-main">
+      <div class="brand">
+        <a href="/" class="brand-link">
+          <span class="brand-mark">ET/</span>
+          <span class="brand-name">PASARELA</span>
+        </a>
+      </div>
+
+      <!-- Menú de Navegación Minimalista -->
+      <nav class="main-nav" role="tablist">
+        <button class="nav-item active" data-tab="tab-auth" id="tab-btn-auth">
+          <span class="nav-num">01</span> ACCESO & REGISTRO
+        </button>
+        <button class="nav-item" data-tab="tab-pagos" id="tab-btn-pagos">
+          <span class="nav-num">02</span> PAGOS (<span id="count-pagos">0</span>)
+        </button>
+        <button class="nav-item" data-tab="tab-facturas" id="tab-btn-facturas">
+          <span class="nav-num">03</span> FACTURAS JSON (<span id="count-facturas">0</span>)
+        </button>
+        <button class="nav-item" data-tab="tab-roles" id="tab-btn-roles">
+          <span class="nav-num">04</span> ROLES & RBAC
+        </button>
+        <button class="nav-item" data-tab="tab-consola" id="tab-btn-consola">
+          <span class="nav-num">05</span> CONSOLA LIVE
+        </button>
+      </nav>
+
+      <!-- Estado de Sesión en el Header -->
+      <div class="header-user" id="header-user-box">
+        <div class="user-status-indicator">
+          <span class="user-role-tag" id="top-user-role">ADMIN</span>
+          <span class="user-name-tag" id="top-user-name">admin</span>
+        </div>
+        <button type="button" class="btn-minimal btn-sm" id="btn-logout-header">SALIR</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Contenedor Principal -->
+  <main class="main-container">
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 01: ACCESO Y REGISTRO (LOGIN & CREAR USUARIO) -->
+    <!-- =================================================================== -->
+    <section class="tab-pane active" id="tab-auth">
+      
+      <div class="editorial-hero">
+        <div class="hero-label">01 / AUTENTICACIÓN & GESTIÓN DE CUENTAS</div>
+        <h1 class="hero-title">ACCESO Y CONTROL DE IDENTIDAD</h1>
+        <p class="hero-subtitle">
+          Inicia sesión con credenciales existentes para obtener un token JWT o registra una nueva cuenta de usuario regular en el sistema.
+        </p>
+      </div>
+
+      <div class="auth-grid">
+        
+        <!-- Vista 1: Cuando NO hay sesión activa (Formularios de Login y Registro) -->
+        <div class="minimal-card auth-card" id="auth-unlogged-box">
+          <div class="auth-tabs">
+            <button type="button" class="auth-tab-btn active" id="btn-switch-login">
+              [ 01. INICIAR SESIÓN ]
+            </button>
+            <button type="button" class="auth-tab-btn" id="btn-switch-registro">
+              [ 02. CREAR USUARIO NORMAL ]
+            </button>
+          </div>
+
+          <!-- FORMULARIO 1: INICIAR SESIÓN -->
+          <form id="form-login" class="auth-form active">
+            <div class="form-field">
+              <label for="login-username">USUARIO / USERNAME</label>
+              <input type="text" id="login-username" required placeholder="admin o usuario" autocomplete="username">
+            </div>
+
+            <div class="form-field">
+              <label for="login-password">CONTRASEÑA / PASSWORD</label>
+              <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+            </div>
+
+            <button type="submit" class="btn-solid w-full" id="btn-submit-login">
+              INGRESAR AL SISTEMA (GENERAR JWT) &rarr;
+            </button>
+
+            <!-- Atajos de Relleno Rápido -->
+            <div class="quick-fill-box">
+              <span class="quick-fill-title">RELLENO RÁPIDO PARA PRUEBAS:</span>
+              <div class="quick-fill-actions">
+                <button type="button" class="btn-outline btn-xs" id="quick-fill-admin">
+                  + RELLENAR ADMIN (admin / admin123)
+                </button>
+                <button type="button" class="btn-outline btn-xs" id="quick-fill-user">
+                  + RELLENAR USUARIO (usuario / usuario123)
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <!-- FORMULARIO 2: CREAR USUARIO NORMAL -->
+          <form id="form-registro-normal" class="auth-form">
+            <div class="form-field">
+              <label for="registro-username">NOMBRE DE USUARIO *</label>
+              <input type="text" id="registro-username" required placeholder="Ej. nuevo_cliente" minlength="3">
+              <span class="field-hint">Mínimo 3 caracteres alfanuméricos</span>
+            </div>
+
+            <div class="form-field">
+              <label for="registro-password">CONTRASEÑA *</label>
+              <input type="password" id="registro-password" required placeholder="Mínimo 4 caracteres" minlength="4">
+            </div>
+
+            <div class="form-field">
+              <label for="registro-email">CORREO ELECTRÓNICO (OPCIONAL)</label>
+              <input type="email" id="registro-email" placeholder="cliente@empresa.com">
+            </div>
+
+            <div class="role-assigned-notice">
+              <span class="notice-badge">ROL ASIGNADO: USUARIO</span>
+              <p class="notice-text">
+                Esta cuenta se creará con el rol estándar <strong>usuario</strong> (podrá registrar pagos y facturas, pero no tendrá permisos para eliminar ni modificar recursos del sistema).
+              </p>
+            </div>
+
+            <button type="submit" class="btn-solid w-full" id="btn-submit-registro">
+              CREAR CUENTA DE USUARIO REGULAR &rarr;
+            </button>
+          </form>
+        </div>
+
+        <!-- Vista 2: Cuando SÍ hay sesión activa (El formulario desaparece y se muestra esto) -->
+        <div class="minimal-card session-active-card hidden" id="auth-logged-box">
+          <div class="session-active-top">
+            <span class="role-pill-black" id="active-box-role">ROL: ADMIN</span>
+            <span class="mono text-xs text-muted">SESIÓN INICIADA CORRECTAMENTE</span>
+          </div>
+
+          <h2 class="session-active-title">AUTENTICADO COMO <span id="active-box-username">ADMIN</span></h2>
+          <p class="session-active-desc">
+            Ya tienes una sesión activa en el sistema. Tus operaciones y peticiones HTTP están siendo autorizadas con tu token JWT.
+          </p>
+
+          <div class="session-quick-actions">
+            <button type="button" class="btn-solid" id="btn-session-goto-pagos">
+              IR A PAGOS REGISTRADOS &rarr;
+            </button>
+            <button type="button" class="btn-outline" id="btn-session-goto-facturas">
+              IR A FACTURACIÓN JSON &rarr;
+            </button>
+          </div>
+
+          <div class="session-footer-actions">
+            <button type="button" class="btn-outline btn-sm" id="btn-session-create-user">
+              + REGISTRAR OTRO USUARIO NORMAL
+            </button>
+            <button type="button" class="btn-minimal btn-sm" id="btn-session-logout">
+              CERRAR SESIÓN / CAMBIAR DE CUENTA
+            </button>
+          </div>
+        </div>
+
+
+        <!-- Columna Informativa Editorial -->
+        <div class="minimal-card auth-info-card">
+          <div class="info-block">
+            <div class="info-tag">CREDENCIALES EN .ENV</div>
+            <h3 class="info-heading">ADMINISTRADOR VS USUARIO</h3>
+            <p class="info-p">
+              Las credenciales principales están cargadas de forma segura desde el archivo <code>.env</code> de la raíz del proyecto.
+            </p>
+          </div>
+
+          <div class="credentials-table">
+            <div class="cred-row header">
+              <span>ROL</span>
+              <span>USUARIO</span>
+              <span>CONTRASEÑA</span>
+            </div>
+            <div class="cred-row">
+              <span class="bold">ADMIN</span>
+              <code>admin</code>
+              <code>admin123</code>
+            </div>
+            <div class="cred-row">
+              <span class="bold">USUARIO</span>
+              <code>usuario</code>
+              <code>usuario123</code>
+            </div>
+          </div>
+
+          <div class="session-display-box" id="session-display-box">
+            <span class="session-label">ESTADO DE SESIÓN ACTUAL:</span>
+            <div class="session-current">
+              <span class="session-name" id="session-user-name">admin</span>
+              <span class="session-role" id="session-user-role">ROL: ADMIN</span>
+            </div>
+            <div class="token-container">
+              <span class="token-label">JWT ACTIVO:</span>
+              <code class="token-text" id="session-token-text">No autenticado</code>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 02: PAGOS SIMULADOS -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-pagos">
+      
+      <div class="editorial-hero">
+        <div class="hero-label">02 / TRANSACCIONES</div>
+        <div class="hero-flex">
+          <div>
+            <h1 class="hero-title">PAGOS REGISTRADOS</h1>
+            <p class="hero-subtitle">Gestión de pagos simulados procesados en la pasarela SQLite.</p>
+          </div>
+          <button type="button" class="btn-solid" id="btn-abrir-modal-pago">
+            + NUEVO PAGO SIMULADO
+          </button>
+        </div>
+      </div>
+
+      <!-- Métricas Minimalistas en Bloques Tipográficos -->
+      <div class="stats-row">
+        <div class="stat-block">
+          <span class="stat-label">TOTAL PROCESADO</span>
+          <span class="stat-number" id="metric-total-monto">$0.00</span>
+          <span class="stat-sub" id="metric-total-pagos-count">0 pagos en total</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">PAGOS APROBADOS</span>
+          <span class="stat-number" id="metric-pagos-aprobados">0</span>
+          <span class="stat-sub">Disponibles para facturar</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">PAGOS PENDIENTES</span>
+          <span class="stat-number" id="metric-pagos-pendientes">0</span>
+          <span class="stat-sub">Por conciliar</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">PERMISOS DE TU ROL</span>
+          <span class="stat-number" id="metric-rol-status">ADMIN</span>
+          <span class="stat-sub" id="metric-permisos-desc">Acceso total de escritura y borrado</span>
+        </div>
+      </div>
+
+      <!-- Filtros -->
+      <div class="filters-row">
+        <input type="text" id="filtro-pagos-cliente" placeholder="Buscar por nombre de cliente..." class="filter-input">
+        <select id="filtro-pagos-estado" class="filter-select">
+          <option value="">TODOS LOS ESTADOS</option>
+          <option value="aprobado">APROBADO</option>
+          <option value="pendiente">PENDIENTE</option>
+          <option value="rechazado">RECHAZADO</option>
+        </select>
+      </div>
+
+      <!-- Tabla de Pagos -->
+      <div class="table-frame">
+        <table class="editorial-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>CLIENTE</th>
+              <th>MONTO</th>
+              <th>MÉTODO</th>
+              <th>ESTADO</th>
+              <th>CREADO POR</th>
+              <th>FECHA</th>
+              <th class="text-right">ACCIONES</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-pagos">
+            <tr>
+              <td colspan="8" class="text-center py-8">Cargando transacciones...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 03: FACTURACIÓN EN FORMATO JSON -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-facturas">
+      
+      <div class="editorial-hero">
+        <div class="hero-label">03 / FACTURACIÓN ELECTRÓNICA</div>
+        <div class="hero-flex">
+          <div>
+            <h1 class="hero-title">FACTURACIÓN EN FORMATO JSON</h1>
+            <p class="hero-subtitle">
+              Generación de facturas estructuradas con desglose de ítems, cálculo automático de IVA y firma de integridad SHA-256.
+            </p>
+          </div>
+          <button type="button" class="btn-solid" id="btn-abrir-modal-factura">
+            + EMITIR FACTURA JSON
+          </button>
+        </div>
+      </div>
+
+      <!-- Métricas Facturación -->
+      <div class="stats-row">
+        <div class="stat-block">
+          <span class="stat-label">TOTAL FACTURADO</span>
+          <span class="stat-number" id="metric-facturado-total">$0.00</span>
+          <span class="stat-sub" id="metric-facturas-count">0 facturas emitidas</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">IMPUESTO IVA LIQUIDADO</span>
+          <span class="stat-number" id="metric-facturado-iva">$0.00</span>
+          <span class="stat-sub">Tarifa estándar aplicada</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">FACTURAS PAGADAS</span>
+          <span class="stat-number" id="metric-facturas-pagadas">0</span>
+          <span class="stat-sub">Conciliadas</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">FACTURAS PENDIENTES</span>
+          <span class="stat-number" id="metric-facturas-emitidas">0</span>
+          <span class="stat-sub">Estado emitida</span>
+        </div>
+      </div>
+
+      <!-- Tabla de Facturas -->
+      <div class="table-frame">
+        <table class="editorial-table">
+          <thead>
+            <tr>
+              <th>N° FACTURA</th>
+              <th>CLIENTE</th>
+              <th>NIT / DOC</th>
+              <th>PAGO REF</th>
+              <th>SUBTOTAL</th>
+              <th>IVA</th>
+              <th>TOTAL</th>
+              <th>ESTADO</th>
+              <th class="text-right">FORMATO JSON / ACCIONES</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-facturas">
+            <tr>
+              <td colspan="9" class="text-center py-8">Cargando facturas...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 04: ROLES & RBAC -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-roles">
+      
+      <div class="editorial-hero">
+        <div class="hero-label">04 / SEGURIDAD & ROLES</div>
+        <h1 class="hero-title">CONTROL DE ACCESO BASADO EN ROLES</h1>
+        <p class="hero-subtitle">
+          Reglas de autorización del sistema. Los intentos de acceso o eliminación no autorizados son bloqueados con código <strong>403 Forbidden</strong>.
+        </p>
+      </div>
+
+      <div class="roles-comparison-grid">
+        
+        <div class="role-box admin-box">
+          <div class="role-box-header">
+            <span class="role-pill-black">ROL: ADMIN</span>
+            <span class="role-tagline">ACCESO TOTAL AL SISTEMA</span>
+          </div>
+          <h2 class="role-title">ADMINISTRADOR</h2>
+          <p class="role-desc">Responsable de supervisión, modificación de pagos y administración de usuarios.</p>
+
+          <ul class="role-specs">
+            <li><span>✓</span> Crear, consultar, modificar y eliminar pagos.</li>
+            <li><span>✓</span> Emitir facturas y anularlas o eliminarlas.</li>
+            <li><span>✓</span> Consultar el listado completo de usuarios en SQLite (GET /usuarios).</li>
+            <li><span>✓</span> Asignar rol de administrador a otros usuarios.</li>
+          </ul>
+
+          <button type="button" class="btn-solid w-full" id="btn-switch-to-admin">
+            CAMBIAR A SESIÓN DE ADMIN &rarr;
+          </button>
+        </div>
+
+        <div class="role-box user-box">
+          <div class="role-box-header">
+            <span class="role-pill-outline">ROL: USUARIO</span>
+            <span class="role-tagline">OPERACIÓN SEGURA ESTÁNDAR</span>
+          </div>
+          <h2 class="role-title">USUARIO REGULAR</h2>
+          <p class="role-desc">Cliente o usuario operativo del sistema con permisos no destructivos.</p>
+
+          <ul class="role-specs">
+            <li><span>✓</span> Crear pagos simulados y consultar pagos.</li>
+            <li><span>✓</span> Emitir facturas en formato JSON e inspeccionarlas.</li>
+            <li class="restricted"><span>✕</span> <strong>NO puede modificar pagos</strong> (Retorna 403 Forbidden).</li>
+            <li class="restricted"><span>✕</span> <strong>NO puede eliminar pagos</strong> (Retorna 403 Forbidden).</li>
+            <li class="restricted"><span>✕</span> <strong>NO puede eliminar facturas</strong> (Retorna 403 Forbidden).</li>
+            <li class="restricted"><span>✕</span> <strong>NO puede ver la lista de usuarios</strong> (Retorna 403 Forbidden).</li>
+          </ul>
+
+          <button type="button" class="btn-outline w-full" id="btn-switch-to-user">
+            CAMBIAR A SESIÓN DE USUARIO &rarr;
+          </button>
+        </div>
+
+      </div>
+
+      <!-- Tabla de usuarios en SQLite -->
+      <div class="editorial-hero mt-12">
+        <div class="hero-label">USUARIOS REGISTRADOS EN BASE DE DATOS (GET /usuarios)</div>
+        <h2 class="hero-title">DIRECTORIO DE USUARIOS</h2>
+      </div>
+
+      <div class="table-frame" id="contenedor-usuarios-frame">
+        <table class="editorial-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>USERNAME</th>
+              <th>ROL</th>
+              <th>EMAIL</th>
+              <th>FECHA CREACIÓN</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-usuarios">
+            <tr>
+              <td colspan="5" class="text-center py-8">Cargando directorio de usuarios...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 05: CONSOLA API LIVE -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-consola">
+      
+      <div class="editorial-hero">
+        <div class="hero-label">05 / INSPECCIÓN DE API</div>
+        <h1 class="hero-title">CONSOLA API Y RESPUESTAS JSON</h1>
+        <p class="hero-subtitle">Envía peticiones directas para comprobar códigos de estado HTTP y respuestas JSON en crudo.</p>
+      </div>
+
+      <div class="console-grid">
+        <div class="console-nav-panel">
+          <span class="console-panel-title">ENDPOINTS DE PRUEBA:</span>
+          
+          <button type="button" class="btn-console" data-action="get-me">
+            <span class="method-tag">GET</span> /auth/me
+          </button>
+          <button type="button" class="btn-console" data-action="get-pagos">
+            <span class="method-tag">GET</span> /pagos
+          </button>
+          <button type="button" class="btn-console" data-action="get-facturas">
+            <span class="method-tag">GET</span> /facturas
+          </button>
+          <button type="button" class="btn-console" data-action="get-usuarios">
+            <span class="method-tag">GET</span> /usuarios (Solo Admin)
+          </button>
+          <button type="button" class="btn-console text-danger" data-action="forzar-403">
+            <span class="method-tag delete">DEL</span> /pagos/1 (Prueba 403 Forbidden)
+          </button>
+        </div>
+
+        <div class="console-output-panel">
+          <div class="output-topbar">
+            <div class="output-endpoint">
+              <span class="method-tag" id="console-method">GET</span>
+              <span id="console-url">/auth/me</span>
+              <span class="status-code" id="console-status">200 OK</span>
+            </div>
+            <button type="button" class="btn-outline btn-xs" id="btn-copiar-consola">COPIAR JSON</button>
+          </div>
+          <pre class="raw-json-block"><code id="console-output">// Selecciona un endpoint de la izquierda para ver el resultado en vivo...</code></pre>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- =================================================================== -->
+  <!-- MODAL: REGISTRAR NUEVO PAGO -->
+  <!-- =================================================================== -->
+  <div class="editorial-modal-backdrop" id="modal-pago">
+    <div class="editorial-modal">
+      <div class="modal-top">
+        <h3 class="modal-h3">NUEVO PAGO SIMULADO</h3>
+        <button type="button" class="modal-close" data-close="modal-pago">&times;</button>
+      </div>
+      <form id="form-nuevo-pago">
+        <div class="modal-content">
+          <div class="form-field">
+            <label for="pago-cliente">CLIENTE / TITULAR *</label>
+            <input type="text" id="pago-cliente" required placeholder="Ej. Empresa Alfa S.A.S.">
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="pago-monto">MONTO *</label>
+              <input type="number" id="pago-monto" step="0.01" min="0.01" required placeholder="0.00">
+            </div>
+            <div class="form-field">
+              <label for="pago-moneda">MONEDA *</label>
+              <select id="pago-moneda">
+                <option value="COP">COP</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="pago-metodo">MÉTODO DE PAGO *</label>
+              <select id="pago-metodo">
+                <option value="tarjeta">TARJETA</option>
+                <option value="transferencia">TRANSFERENCIA</option>
+                <option value="efectivo">EFECTIVO</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="pago-estado">ESTADO INICIAL *</label>
+              <select id="pago-estado">
+                <option value="aprobado">APROBADO</option>
+                <option value="pendiente">PENDIENTE</option>
+                <option value="rechazado">RECHAZADO</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-bottom">
+          <button type="button" class="btn-outline" data-close="modal-pago">CANCELAR</button>
+          <button type="submit" class="btn-solid">REGISTRAR PAGO &rarr;</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL: EMITIR FACTURA JSON -->
+  <!-- =================================================================== -->
+  <div class="editorial-modal-backdrop" id="modal-factura">
+    <div class="editorial-modal modal-wide">
+      <div class="modal-top">
+        <h3 class="modal-h3">EMISIÓN DE FACTURA EN FORMATO JSON</h3>
+        <button type="button" class="modal-close" data-close="modal-factura">&times;</button>
+      </div>
+      <form id="form-nueva-factura">
+        <div class="modal-content">
+          
+          <div class="mode-selector">
+            <label class="radio-pill">
+              <input type="radio" name="modo-factura" value="pago" checked id="radio-factura-pago">
+              <span>DESDE PAGO EXISTENTE (AUTOGENERAR)</span>
+            </label>
+            <label class="radio-pill">
+              <input type="radio" name="modo-factura" value="manual" id="radio-factura-manual">
+              <span>FACTURA MANUAL (CON ÍTEMS)</span>
+            </label>
+          </div>
+
+          <!-- Selector de Pago -->
+          <div class="form-field" id="grupo-selector-pago">
+            <label for="factura-pago-id">SELECCIONA EL PAGO ASOCIADO *</label>
+            <select id="factura-pago-id">
+              <option value="">Selecciona un pago...</option>
+            </select>
+          </div>
+
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="factura-cliente">CLIENTE / RAZÓN SOCIAL *</label>
+              <input type="text" id="factura-cliente" required placeholder="Nombre del cliente">
+            </div>
+            <div class="form-field">
+              <label for="factura-email">EMAIL DEL CLIENTE</label>
+              <input type="email" id="factura-email" placeholder="cliente@correo.com">
+            </div>
+          </div>
+
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label for="factura-documento">NIT / DOCUMENTO</label>
+              <input type="text" id="factura-documento" placeholder="900.123.456-7">
+            </div>
+            <div class="form-field">
+              <label for="factura-moneda">MONEDA *</label>
+              <select id="factura-moneda">
+                <option value="COP">COP</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="factura-iva-porcentaje">TASA IVA (%) *</label>
+              <input type="number" id="factura-iva-porcentaje" value="19.0" min="0" max="100" step="0.5">
+            </div>
+          </div>
+
+          <!-- Ítems dinámicos (modo manual) -->
+          <div id="seccion-items-factura" class="hidden">
+            <div class="items-bar">
+              <span class="items-title">LÍNEAS DE ARTÍCULOS O SERVICIOS:</span>
+              <button type="button" class="btn-outline btn-xs" id="btn-agregar-item">+ AGREGAR LÍNEA</button>
+            </div>
+            <div id="items-container" class="items-list">
+              <!-- Filas dinámicas -->
+            </div>
+          </div>
+
+          <!-- Resumen de Totales -->
+          <div class="totals-summary-frame">
+            <div class="tot-line">
+              <span>SUBTOTAL:</span>
+              <span id="prev-subtotal" class="mono">$0.00</span>
+            </div>
+            <div class="tot-line">
+              <span>IVA (<span id="prev-iva-tasa">19.0</span>%):</span>
+              <span id="prev-iva" class="mono">$0.00</span>
+            </div>
+            <div class="tot-line grand">
+              <span>TOTAL FACTURA:</span>
+              <span id="prev-total" class="mono bold">$0.00</span>
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-bottom">
+          <button type="button" class="btn-outline" data-close="modal-factura">CANCELAR</button>
+          <button type="submit" class="btn-solid">EMITIR FACTURA JSON &rarr;</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL: VISOR DE FACTURA ELECTRÓNICA JSON -->
+  <!-- =================================================================== -->
+  <div class="editorial-modal-backdrop" id="modal-visor-json">
+    <div class="editorial-modal modal-wide">
+      <div class="modal-top">
+        <div>
+          <h3 class="modal-h3" id="visor-numero-factura">FACTURA #FAC-2026-0001</h3>
+          <span class="modal-meta" id="visor-tipo-doc">FORMATO ELECTRÓNICO ESTÁNDAR JSON</span>
+        </div>
+        <div class="modal-actions-right">
+          <button type="button" class="btn-outline btn-xs" id="btn-copiar-visor">COPIAR JSON</button>
+          <button type="button" class="btn-solid btn-xs" id="btn-descargar-json">DESCARGAR .JSON</button>
+          <button type="button" class="modal-close" data-close="modal-visor-json">&times;</button>
+        </div>
+      </div>
+      <div class="modal-content p-0">
+        <pre class="json-code-viewer"><code id="visor-json-content"></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Box -->
+  <div class="toast-stack" id="toast-container"></div>
+
+  <!-- Script JS -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
