@@ -522,7 +522,7 @@
   <div class="editorial-modal-backdrop" id="modal-pago">
     <div class="editorial-modal">
       <div class="modal-top">
-        <h3 class="modal-h3">NUEVO PAGO SIMULADO</h3>
+        <h3 class="modal-h3" id="titulo-modal-pago">NUEVO PAGO SIMULADO</h3>
         <button type="button" class="modal-close" data-close="modal-pago">&times;</button>
       </div>
       <form id="form-nuevo-pago">
@@ -566,7 +566,7 @@
         </div>
         <div class="modal-bottom">
           <button type="button" class="btn-outline" data-close="modal-pago">CANCELAR</button>
-          <button type="submit" class="btn-solid">REGISTRAR PAGO &rarr;</button>
+          <button type="submit" class="btn-solid" id="btn-submit-pago">REGISTRAR PAGO &rarr;</button>
         </div>
       </form>
     </div>
@@ -576,12 +576,12 @@
   <!-- MODAL: EMITIR FACTURA JSON -->
   <!-- =================================================================== -->
   <div class="editorial-modal-backdrop" id="modal-factura">
-    <div class="editorial-modal modal-wide">
+    <div class="editorial-modal modal-wide invoice-modal">
       <div class="modal-top">
         <h3 class="modal-h3">EMISIÓN DE FACTURA EN FORMATO JSON</h3>
         <button type="button" class="modal-close" data-close="modal-factura">&times;</button>
       </div>
-      <form id="form-nueva-factura">
+      <form id="form-nueva-factura" class="invoice-form">
         <div class="modal-content">
           
           <div class="mode-selector">

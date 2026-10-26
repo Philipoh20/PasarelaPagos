@@ -1173,6 +1173,31 @@ body {
   max-width: 820px;
 }
 
+.invoice-modal {
+  max-height: min(90vh, 900px);
+  max-height: min(90dvh, 900px);
+}
+
+.invoice-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.invoice-form .modal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.invoice-form .modal-bottom {
+  flex: 0 0 auto;
+}
+
 .modal-top {
   display: flex;
   align-items: center;

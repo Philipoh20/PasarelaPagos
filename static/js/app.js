@@ -11,6 +11,7 @@ const AppState = {
   facturas: [],
   usuarios: [],
   pagoSeleccionadoParaFacturar: null,
+  pagoEnEdicionId: null,
 };
 
 const THEME_STORAGE_KEY = 'pasarela_theme';
@@ -155,10 +156,13 @@ function configurarEventos() {
 
   // Modal Nuevo Pago
   document.getElementById('btn-abrir-modal-pago')?.addEventListener('click', () => {
+    AppState.pagoEnEdicionId = null;
     document.getElementById('form-nuevo-pago').reset();
+    document.getElementById('titulo-modal-pago').textContent = 'NUEVO PAGO SIMULADO';
+    document.getElementById('btn-submit-pago').textContent = 'REGISTRAR PAGO →';
     abrirModal('modal-pago');
   });
-  document.getElementById('form-nuevo-pago')?.addEventListener('submit', guardarNuevoPago);
+  document.getElementById('form-nuevo-pago')?.addEventListener('submit', guardarPago);
 
   // Modal Facturación
   document.getElementById('btn-abrir-modal-factura')?.addEventListener('click', abrirModalFactura);
@@ -258,6 +262,7 @@ function cerrarSesion(mostrarToast = true) {
   document.getElementById('session-user-name').innerText = 'SIN SESIÓN';
   document.getElementById('session-user-role').innerText = 'ROL: NINGUNO';
   document.getElementById('session-token-text').innerText = 'No hay token activo';
+  renderizarTablaPagos(AppState.pagos);
 
   if (mostrarToast) {
     lanzarToast('info', 'SESIÓN FINALIZADA', 'Inicia sesión con un usuario para realizar transacciones.');
@@ -375,6 +380,7 @@ async function cargarPagos() {
 function renderizarTablaPagos(pagos) {
   const tbody = document.getElementById('tbody-pagos');
   const countBadge = document.getElementById('count-pagos');
+  const esAdmin = AppState.usuarioActual?.rol === 'admin';
   countBadge.innerText = pagos.length;
 
   if (pagos.length === 0) {
@@ -396,9 +402,14 @@ function renderizarTablaPagos(pagos) {
           <button type="button" class="btn-table-action" onclick="iniciarFacturacionDePago(${p.id})">
             + FACTURAR
           </button>
-          <button type="button" class="btn-table-action delete" onclick="eliminarPagoAccion(${p.id})">
-            ELIMINAR
-          </button>
+          ${esAdmin ? `
+            <button type="button" class="btn-table-action" onclick="iniciarEdicionPago(${p.id})">
+              EDITAR
+            </button>
+            <button type="button" class="btn-table-action delete" onclick="eliminarPagoAccion(${p.id})">
+              ELIMINAR
+            </button>
+          ` : ''}
         </div>
       </td>
     </tr>
@@ -539,8 +550,16 @@ function alternarModoFactura() {
   const modo = document.querySelector('input[name="modo-factura"]:checked').value;
   const grupoPago = document.getElementById('grupo-selector-pago');
   const seccionItems = document.getElementById('seccion-items-factura');
+  const esFacturaManual = modo === 'manual';
+  const campoCliente = document.getElementById('factura-cliente');
+  const camposItems = document.querySelectorAll('#items-container input');
 
-  if (modo === 'pago') {
+  campoCliente.required = esFacturaManual;
+  camposItems.forEach(campo => {
+    campo.disabled = !esFacturaManual;
+  });
+
+  if (!esFacturaManual) {
     grupoPago.classList.remove('hidden');
     seccionItems.classList.add('hidden');
     alSeleccionarPagoEnFactura();
@@ -570,6 +589,7 @@ function alSeleccionarPagoEnFactura() {
   const select = document.getElementById('factura-pago-id');
   const opt = select.options[select.selectedIndex];
   if (!opt || !opt.value) {
+    document.getElementById('factura-cliente').value = '';
     document.getElementById('prev-subtotal').innerText = '$0.00';
     document.getElementById('prev-iva').innerText = '$0.00';
     document.getElementById('prev-total').innerText = '$0.00';
@@ -658,10 +678,37 @@ function iniciarFacturacionDePago(pagoId) {
 // ENVÍO DE ACCIONES A LA API (MUTACIONES)
 // ==============================================================================
 
-async function guardarNuevoPago(e) {
+function iniciarEdicionPago(pagoId) {
+  if (AppState.usuarioActual?.rol !== 'admin') {
+    lanzarToast('forbidden', '403 FORBIDDEN', 'Solo un administrador puede modificar pagos.');
+    return;
+  }
+
+  const pago = AppState.pagos.find(item => item.id === pagoId);
+  if (!pago) {
+    lanzarToast('error', 'PAGO NO DISPONIBLE', 'No se encontró el pago para editar. Actualiza la lista e inténtalo de nuevo.');
+    return;
+  }
+
+  AppState.pagoEnEdicionId = pagoId;
+  document.getElementById('pago-cliente').value = pago.cliente;
+  document.getElementById('pago-monto').value = pago.monto;
+  document.getElementById('pago-moneda').value = pago.moneda;
+  document.getElementById('pago-metodo').value = pago.metodo_pago;
+  document.getElementById('pago-estado').value = pago.estado;
+  document.getElementById('titulo-modal-pago').textContent = `EDITAR PAGO #${pagoId}`;
+  document.getElementById('btn-submit-pago').textContent = 'GUARDAR CAMBIOS →';
+  abrirModal('modal-pago');
+}
+
+async function guardarPago(e) {
   e.preventDefault();
   if (!AppState.token) {
     lanzarToast('forbidden', 'NO AUTENTICADO', 'Inicia sesión primero para registrar un pago.');
+    return;
+  }
+  if (AppState.pagoEnEdicionId && AppState.usuarioActual?.rol !== 'admin') {
+    lanzarToast('forbidden', '403 FORBIDDEN', 'Solo un administrador puede modificar pagos.');
     return;
   }
 
@@ -672,10 +719,11 @@ async function guardarNuevoPago(e) {
     metodo_pago: document.getElementById('pago-metodo').value,
     estado: document.getElementById('pago-estado').value,
   };
+  const pagoId = AppState.pagoEnEdicionId;
 
   try {
-    const res = await fetch('/pagos', {
-      method: 'POST',
+    const res = await fetch(pagoId ? `/pagos/${pagoId}` : '/pagos', {
+      method: pagoId ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${AppState.token}`
@@ -684,10 +732,22 @@ async function guardarNuevoPago(e) {
     });
 
     const data = await res.json();
+    if (res.status === 403) {
+      lanzarToast('forbidden', '403 FORBIDDEN', 'Solo un administrador puede modificar pagos.');
+      return;
+    }
     if (!res.ok) throw new Error(data.error || 'Error registrando pago');
 
     cerrarModal('modal-pago');
-    lanzarToast('success', 'PAGO REGISTRADO', `Pago #${data.id} creado con éxito para ${data.cliente}`);
+    AppState.pagoEnEdicionId = null;
+    document.getElementById('form-nuevo-pago').reset();
+    document.getElementById('titulo-modal-pago').textContent = 'NUEVO PAGO SIMULADO';
+    document.getElementById('btn-submit-pago').textContent = 'REGISTRAR PAGO →';
+    lanzarToast(
+      'success',
+      pagoId ? 'PAGO ACTUALIZADO' : 'PAGO REGISTRADO',
+      pagoId ? `Pago #${data.id} actualizado correctamente.` : `Pago #${data.id} creado con éxito para ${data.cliente}`
+    );
     await recargarTodo();
   } catch (err) {
     lanzarToast('error', 'ERROR', err.message);
@@ -716,14 +776,16 @@ async function guardarNuevaFactura(e) {
       lanzarToast('error', 'SELECCIÓN VACÍA', 'Debes elegir un pago de la lista.');
       return;
     }
-    payload.pago_id = parseInt(pId);
+    payload.pago_id = Number.parseInt(pId, 10);
   } else {
     const items = [];
     Array.from(document.getElementById('items-container').children).forEach(row => {
       const desc = row.querySelector('.item-desc').value.trim();
-      const cant = parseFloat(row.querySelector('.item-cant').value) || 1;
-      const precio = parseFloat(row.querySelector('.item-precio').value) || 0;
-      if (desc) items.push({ descripcion: desc, cantidad: cant, precio_unitario: precio });
+      const cant = Number.parseFloat(row.querySelector('.item-cant').value);
+      const precio = Number.parseFloat(row.querySelector('.item-precio').value);
+      if (desc && Number.isFinite(cant) && Number.isFinite(precio)) {
+        items.push({ descripcion: desc, cantidad: cant, precio_unitario: precio });
+      }
     });
 
     if (items.length === 0) {
