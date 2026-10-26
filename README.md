@@ -79,6 +79,8 @@ Además, el endpoint `GET /facturas/<id>/json` genera el documento normalizado d
 | **PATCH** | `/facturas/<id>/estado` | JWT | `admin` | Cambiar estado de la factura (`emitida`, `pagada`, `anulada`) |
 | **DELETE** | `/facturas/<id>` | JWT | `admin` | Eliminar una factura |
 
+En la pestaña **Pagos**, los administradores pueden seleccionar **EDITAR** en una fila para cambiar sus datos y guardar la actualización. Esta acción usa `PUT /pagos/<id>`; los usuarios regulares no ven los controles de modificación ni eliminación.
+
 ---
 
 ## ⚙️ Configuración del Entorno (`.env`)
