@@ -164,10 +164,7 @@ def autenticar_usuario(usuario, contrasena):
         if fila:
             fila_dict = dict(fila)
             clave_almacenada = fila_dict["password"]
-            if (
-                check_password_hash(clave_almacenada, contrasena)
-                or clave_almacenada == contrasena
-            ):
+            if check_password_hash(clave_almacenada, contrasena):
                 return fila_dict
 
         # Fallback para pruebas o compatibilidad con USUARIOS
