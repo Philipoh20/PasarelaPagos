@@ -180,6 +180,9 @@ function configurarEventos() {
   document.getElementById('filtro-pagos-cliente')?.addEventListener('input', filtrarPagos);
   document.getElementById('filtro-pagos-estado')?.addEventListener('change', filtrarPagos);
 
+  document.getElementById('btn-actualizar-reportes')?.addEventListener('click', cargarReporteResumen);
+  document.getElementById('form-divisas-convertir')?.addEventListener('submit', convertirMontoDivisas);
+
   // Consola Live
   document.querySelectorAll('.btn-console').forEach(btn => {
     btn.addEventListener('click', () => ejecutarAccionConsola(btn.getAttribute('data-action')));
@@ -288,6 +291,14 @@ function actualizarEstadoVisualSesion(estaLogueado) {
     if (uInput) uInput.value = '';
     if (pInput) pInput.value = '';
   }
+  actualizarAccesoAPIs(Boolean(estaLogueado && AppState.token));
+}
+
+function actualizarAccesoAPIs(autenticado) {
+  document.getElementById('reportes-sesion-requerida')?.classList.toggle('hidden', autenticado);
+  document.getElementById('reportes-contenido')?.classList.toggle('hidden', !autenticado);
+  document.getElementById('divisas-sesion-requerida')?.classList.toggle('hidden', autenticado);
+  document.getElementById('divisas-contenido')?.classList.toggle('hidden', !autenticado);
 }
 
 
@@ -964,6 +975,140 @@ function renderizarTablaUsuarios(usuarios) {
 }
 
 // ==============================================================================
+// REPORTES Y CONVERSIÓN DE DIVISAS
+// ==============================================================================
+
+async function cargarReporteResumen() {
+  const estado = document.getElementById('reportes-estado');
+  if (!AppState.token) {
+    estado.textContent = 'Inicia sesión para usar esta función.';
+    return;
+  }
+
+  estado.className = 'api-status';
+  estado.textContent = 'Cargando reportes...';
+  try {
+    const res = await fetch('/api/reportes/resumen', {
+      headers: { 'Authorization': `Bearer ${AppState.token}` }
+    });
+    const data = await res.json();
+
+    if (res.status === 401) {
+      estado.className = 'api-status error';
+      estado.textContent = 'Tu sesión venció o no es válida. Inicia sesión nuevamente para consultar los reportes.';
+      return;
+    }
+    if (res.status === 503) {
+      estado.className = 'api-status error';
+      estado.textContent = 'El servicio de reportes no está disponible. Inicia reportes_api en el puerto 5001.';
+      return;
+    }
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar los reportes.');
+
+    const pagos = data.pagos || {};
+    const facturas = data.facturas || {};
+    document.getElementById('reporte-total-transacciones').textContent =
+      String(pagos.total_transacciones ?? 0);
+    document.getElementById('reporte-monto-total').textContent =
+      formatearNumero(pagos.monto_total);
+    document.getElementById('reporte-total-facturas').textContent =
+      String(facturas.total_facturas ?? 0);
+    document.getElementById('reporte-total-iva').textContent =
+      formatearNumero(facturas.total_iva_recaudado);
+    renderizarTablaConteos(pagos.por_estado, 'reporte-por-estado');
+    renderizarTablaConteos(pagos.por_metodo, 'reporte-por-metodo');
+    renderizarTablaMonedas(pagos.por_moneda);
+    renderizarTopClientes(facturas.top_clientes);
+    estado.textContent = 'Reportes actualizados correctamente.';
+  } catch (err) {
+    estado.className = 'api-status error';
+    estado.textContent = err.message || 'No se pudieron cargar los reportes.';
+  }
+}
+
+function renderizarTablaConteos(datos, idTbody) {
+  const tbody = document.getElementById(idTbody);
+  const filas = Object.entries(datos || {});
+  tbody.innerHTML = filas.length
+    ? filas.map(([nombre, cantidad]) => `
+      <tr><td>${escaparHTML(nombre)}</td><td class="text-right">${escaparHTML(String(cantidad ?? 0))}</td></tr>
+    `).join('')
+    : '<tr><td colspan="2">Sin datos</td></tr>';
+}
+
+function renderizarTablaMonedas(datos) {
+  const tbody = document.getElementById('reporte-por-moneda');
+  const filas = Object.entries(datos || {});
+  tbody.innerHTML = filas.length
+    ? filas.map(([moneda, detalle]) => `
+      <tr>
+        <td>${escaparHTML(moneda)}</td>
+        <td class="text-right">${escaparHTML(String(detalle.cantidad ?? 0))}</td>
+        <td class="text-right">${formatearNumero(detalle.monto)}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="3">Sin datos</td></tr>';
+}
+
+function renderizarTopClientes(clientes) {
+  const tbody = document.getElementById('reporte-top-clientes');
+  tbody.innerHTML = Array.isArray(clientes) && clientes.length
+    ? clientes.map(cliente => `
+      <tr>
+        <td>${escaparHTML(cliente.cliente)}</td>
+        <td class="text-right">${formatearNumero(cliente.total)}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="2">Sin datos</td></tr>';
+}
+
+function formatearNumero(valor) {
+  const numero = Number(valor);
+  return Number.isFinite(numero)
+    ? new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numero)
+    : '0,00';
+}
+
+async function convertirMontoDivisas(e) {
+  e.preventDefault();
+  const estado = document.getElementById('divisas-estado');
+  if (!AppState.token) {
+    estado.textContent = 'Inicia sesión para usar esta función.';
+    return;
+  }
+
+  const parametros = new URLSearchParams({
+    monto: document.getElementById('divisas-monto').value,
+    de: document.getElementById('divisas-de').value,
+    a: document.getElementById('divisas-a').value
+  });
+  estado.className = 'api-status';
+  estado.textContent = 'Consultando tasa y convirtiendo...';
+  try {
+    const res = await fetch(`/divisas/convertir?${parametros.toString()}`, {
+      headers: { 'Authorization': `Bearer ${AppState.token}` }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo convertir el monto.');
+
+    const fuente = data.fuente === 'respaldo_local'
+      ? 'Respaldo local (tasas aproximadas)'
+      : 'API en vivo (open.er-api.com)';
+    document.getElementById('divisas-resultado').textContent =
+      `${formatearMoneda(data.resultado, data.a)} ${data.a}`;
+    document.getElementById('divisas-tasa').textContent =
+      `Tasa: 1 ${data.de} = ${formatearNumero(data.tasa)} ${data.a}`;
+    document.getElementById('divisas-fuente').textContent = `Fuente: ${fuente}`;
+    document.getElementById('divisas-fecha').textContent =
+      `Actualización: ${data.fecha_actualizacion}`;
+    estado.textContent = 'Conversión completada.';
+  } catch (err) {
+    estado.className = 'api-status error';
+    estado.textContent = err.message || 'No se pudo convertir el monto.';
+  }
+}
+
+// ==============================================================================
 // CONSOLA API
 // ==============================================================================
 
@@ -980,6 +1125,10 @@ async function ejecutarAccionConsola(action) {
   else if (action === 'get-pagos') endpoint = '/pagos';
   else if (action === 'get-facturas') endpoint = '/facturas';
   else if (action === 'get-usuarios') endpoint = '/usuarios';
+  else if (action === 'get-reporte-resumen') endpoint = '/api/reportes/resumen';
+  else if (action === 'get-divisas-convertir') {
+    endpoint = '/divisas/convertir?monto=100&de=USD&a=COP';
+  }
   else if (action === 'forzar-403') {
     endpoint = '/pagos/1';
     method = 'DELETE';

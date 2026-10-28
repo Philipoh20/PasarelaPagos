@@ -83,14 +83,29 @@ def calcular_reporte_pagos(pagos):
     total_monto = 0.0
     por_estado = {"aprobado": 0, "pendiente": 0, "rechazado": 0}
     por_metodo = {"tarjeta": 0, "transferencia": 0, "efectivo": 0}
+    por_moneda = {}
 
     for pago in pagos:
-        total_monto += float(pago.get("monto", 0))
+        monto = float(pago.get("monto", 0))
+        total_monto += monto
+        moneda = str(pago.get("moneda") or "N/A").upper()
+        agregado_moneda = por_moneda.setdefault(
+            moneda, {"cantidad": 0, "monto": 0.0}
+        )
+        agregado_moneda["cantidad"] += 1
+        agregado_moneda["monto"] += monto
         if pago.get("estado") in por_estado:
             por_estado[pago["estado"]] += 1
         if pago.get("metodo_pago") in por_metodo:
             por_metodo[pago["metodo_pago"]] += 1
 
+    por_moneda = {
+        moneda: {
+            "cantidad": agregado["cantidad"],
+            "monto": round(agregado["monto"], 2),
+        }
+        for moneda, agregado in por_moneda.items()
+    }
     cantidad = len(pagos)
     return {
         "total_transacciones": cantidad,
@@ -98,6 +113,7 @@ def calcular_reporte_pagos(pagos):
         "promedio_monto": round(total_monto / cantidad, 2) if cantidad else 0.0,
         "por_estado": por_estado,
         "por_metodo": por_metodo,
+        "por_moneda": por_moneda,
     }
 
 

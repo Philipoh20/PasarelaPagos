@@ -1018,6 +1018,56 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+.reportes-tablas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.reportes-tablas-grid .table-frame {
+  margin-bottom: 0;
+  overflow-x: auto;
+}
+
+.session-required-message,
+.currency-result {
+  margin-bottom: 24px;
+  padding: 24px;
+}
+
+.currency-converter {
+  margin-bottom: 24px;
+  padding: 24px;
+}
+
+.currency-result .stat-number {
+  margin: 8px 0 16px;
+}
+
+.currency-result p {
+  margin-top: 6px;
+}
+
+.currency-credit {
+  margin-top: 20px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.currency-credit a {
+  color: var(--text-primary);
+}
+
+.api-status {
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+}
+
+.api-status.error {
+  color: #b91c1c;
+}
+
 .console-nav-panel {
   border-right: 1px solid var(--border-strong);
   padding: 24px;

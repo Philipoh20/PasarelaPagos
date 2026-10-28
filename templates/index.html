@@ -18,7 +18,7 @@
   <!-- Barra Superior Minimalista -->
   <header class="site-header">
     <div class="header-ticker">
-      <span>API PASARELA DE PAGOS // V2.0</span>
+      <span>API PASARELA DE PAGOS // V2.1</span>
       <span>•</span>
       <span>SISTEMA DE FACTURACIÓN JSON</span>
       <span>•</span>
@@ -50,6 +50,12 @@
         </button>
         <button class="nav-item" data-tab="tab-consola" id="tab-btn-consola">
           <span class="nav-num">05</span> CONSOLA LIVE
+        </button>
+        <button class="nav-item" data-tab="tab-reportes" id="tab-btn-reportes">
+          <span class="nav-num">06</span> REPORTES
+        </button>
+        <button class="nav-item" data-tab="tab-divisas" id="tab-btn-divisas">
+          <span class="nav-num">07</span> DIVISAS
         </button>
       </nav>
 
@@ -494,6 +500,12 @@
           <button type="button" class="btn-console" data-action="get-usuarios">
             <span class="method-tag">GET</span> /usuarios (Solo Admin)
           </button>
+          <button type="button" class="btn-console" data-action="get-reporte-resumen">
+            <span class="method-tag">GET</span> /api/reportes/resumen
+          </button>
+          <button type="button" class="btn-console" data-action="get-divisas-convertir">
+            <span class="method-tag">GET</span> /divisas/convertir?monto=100&amp;de=USD&amp;a=COP
+          </button>
           <button type="button" class="btn-console text-danger" data-action="forzar-403">
             <span class="method-tag delete">DEL</span> /pagos/1 (Prueba 403 Forbidden)
           </button>
@@ -512,6 +524,132 @@
         </div>
       </div>
 
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 06: API DE REPORTES -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-reportes">
+      <div class="editorial-hero">
+        <div class="hero-label">06 / ANALÍTICA DE OPERACIÓN</div>
+        <div class="hero-flex">
+          <div>
+            <h1 class="hero-title">REPORTES DEL SISTEMA</h1>
+            <p class="hero-subtitle">Resumen de pagos, facturas, impuestos y principales clientes.</p>
+          </div>
+          <button type="button" class="btn-solid" id="btn-actualizar-reportes">
+            ACTUALIZAR REPORTES
+          </button>
+        </div>
+      </div>
+
+      <div class="minimal-card session-required-message" id="reportes-sesion-requerida">
+        Inicia sesión para usar esta función.
+      </div>
+      <div id="reportes-contenido" class="hidden">
+        <p class="api-status" id="reportes-estado" role="status">Pulsa ACTUALIZAR REPORTES para consultar la API.</p>
+
+        <div class="stats-row">
+          <div class="stat-block">
+            <span class="stat-label">TRANSACCIONES</span>
+            <span class="stat-number" id="reporte-total-transacciones">—</span>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">MONTO TOTAL REGISTRADO</span>
+            <span class="stat-number" id="reporte-monto-total">—</span>
+            <span class="stat-sub">Suma de los montos en sus monedas originales</span>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">FACTURAS</span>
+            <span class="stat-number" id="reporte-total-facturas">—</span>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">IVA RECAUDADO</span>
+            <span class="stat-number" id="reporte-total-iva">—</span>
+          </div>
+        </div>
+
+        <div class="reportes-tablas-grid">
+          <div class="table-frame">
+            <table class="editorial-table">
+              <thead><tr><th>PAGOS POR ESTADO</th><th class="text-right">CANTIDAD</th></tr></thead>
+              <tbody id="reporte-por-estado"><tr><td colspan="2">Sin datos</td></tr></tbody>
+            </table>
+          </div>
+          <div class="table-frame">
+            <table class="editorial-table">
+              <thead><tr><th>PAGOS POR MÉTODO</th><th class="text-right">CANTIDAD</th></tr></thead>
+              <tbody id="reporte-por-metodo"><tr><td colspan="2">Sin datos</td></tr></tbody>
+            </table>
+          </div>
+          <div class="table-frame">
+            <table class="editorial-table">
+              <thead><tr><th>MONEDA</th><th class="text-right">PAGOS</th><th class="text-right">MONTO</th></tr></thead>
+              <tbody id="reporte-por-moneda"><tr><td colspan="3">Sin datos</td></tr></tbody>
+            </table>
+          </div>
+          <div class="table-frame">
+            <table class="editorial-table">
+              <thead><tr><th>TOP CLIENTES</th><th class="text-right">TOTAL FACTURADO</th></tr></thead>
+              <tbody id="reporte-top-clientes"><tr><td colspan="2">Sin datos</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- SECCIÓN 07: API DE DIVISAS -->
+    <!-- =================================================================== -->
+    <section class="tab-pane" id="tab-divisas">
+      <div class="editorial-hero">
+        <div class="hero-label">07 / CONVERSIÓN DE MONEDA</div>
+        <h1 class="hero-title">CONVERSOR DE DIVISAS</h1>
+        <p class="hero-subtitle">Consulta tasas actualizadas y convierte montos entre monedas admitidas.</p>
+      </div>
+
+      <div class="minimal-card session-required-message" id="divisas-sesion-requerida">
+        Inicia sesión para usar esta función.
+      </div>
+      <div id="divisas-contenido" class="hidden">
+        <form id="form-divisas-convertir" class="minimal-card currency-converter">
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label for="divisas-monto">MONTO *</label>
+              <input type="number" id="divisas-monto" min="0.01" step="any" value="100" required>
+            </div>
+            <div class="form-field">
+              <label for="divisas-de">MONEDA DE ORIGEN</label>
+              <select id="divisas-de">
+                <option value="USD">USD</option><option value="COP">COP</option>
+                <option value="EUR">EUR</option><option value="MXN">MXN</option>
+                <option value="GBP">GBP</option><option value="BRL">BRL</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="divisas-a">MONEDA DE DESTINO</label>
+              <select id="divisas-a">
+                <option value="COP">COP</option><option value="USD">USD</option>
+                <option value="EUR">EUR</option><option value="MXN">MXN</option>
+                <option value="GBP">GBP</option><option value="BRL">BRL</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" class="btn-solid">CONVERTIR MONTO &rarr;</button>
+        </form>
+
+        <div class="minimal-card currency-result" aria-live="polite">
+          <span class="stat-label">RESULTADO</span>
+          <strong class="stat-number" id="divisas-resultado">—</strong>
+          <p id="divisas-tasa">Tasa: —</p>
+          <p id="divisas-fuente">Fuente: —</p>
+          <p id="divisas-fecha">Actualización: —</p>
+          <p class="api-status" id="divisas-estado" role="status"></p>
+        </div>
+        <p class="currency-credit">
+          <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener noreferrer">Rates By Exchange Rate API</a>
+        </p>
+      </div>
     </section>
 
   </main>

@@ -11,7 +11,7 @@ El sistema implementa dos roles principales con diferentes niveles de autorizaci
 | Rol | Permisos |
 | --- | --- |
 | **`admin`** | Control total del sistema: crear, consultar, modificar y eliminar pagos; emitir, consultar, anular y eliminar facturas; listar usuarios del sistema y asignar roles. |
-| **`usuario`** | Rol de cliente o usuario estándar: crear pagos, consultar pagos, emitir facturas y consultar facturas en formato JSON. **No puede** modificar ni eliminar pagos (retorna `403 Forbidden`), ni eliminar facturas ajenas. |
+| **`usuario`** | Rol de cliente o usuario estándar: crear pagos, consultar pagos, emitir facturas y consultar en formato JSON únicamente sus propias facturas. Una factura ajena responde `404 Not Found`. **No puede** modificar ni eliminar pagos (retorna `403 Forbidden`), ni eliminar facturas. |
 
 ### Flujo de JWT
 1. Al hacer login en `/login`, la API genera un token JWT firmado con el secreto configurado en el archivo `.env`.
@@ -73,13 +73,91 @@ Además, el endpoint `GET /facturas/<id>/json` genera el documento normalizado d
 | **PUT** | `/pagos/<id>` | JWT | `admin` | Actualizar todos los datos de un pago |
 | **DELETE** | `/pagos/<id>` | JWT | `admin` | Eliminar un pago |
 | **POST** | `/facturas` | JWT | `usuario` / `admin` | Emitir una factura en formato JSON |
-| **GET** | `/facturas` | JWT | `usuario` / `admin` | Listar facturas (filtros: `cliente`, `estado`, `pago_id`) |
-| **GET** | `/facturas/<id>` | JWT | `usuario` / `admin` | Consultar detalle de una factura |
-| **GET** | `/facturas/<id>/json` | JWT | `usuario` / `admin` | Obtener formato estándar de facturación electrónica JSON |
+| **GET** | `/facturas` | JWT | `usuario` / `admin` | Listar facturas propias (usuarios) o todas (admin); filtros: `cliente`, `estado`, `pago_id` |
+| **GET** | `/facturas/<id>` | JWT | `usuario` / `admin` | Consultar detalle propio; una factura ajena responde `404` |
+| **GET** | `/facturas/<id>/json` | JWT | `usuario` / `admin` | Obtener JSON estándar solo de facturas propias (admin ve todas) |
 | **PATCH** | `/facturas/<id>/estado` | JWT | `admin` | Cambiar estado de la factura (`emitida`, `pagada`, `anulada`) |
 | **DELETE** | `/facturas/<id>` | JWT | `admin` | Eliminar una factura |
 
 En la pestaña **Pagos**, los administradores pueden seleccionar **EDITAR** en una fila para cambiar sus datos y guardar la actualización. Esta acción usa `PUT /pagos/<id>`; los usuarios regulares no ven los controles de modificación ni eliminación.
+
+---
+
+## APIs del proyecto
+
+El proyecto expone dos servicios Flask. El navegador solo se comunica con la API principal en el puerto `5000`; esta reenvía los reportes al microservicio interno para evitar solicitudes entre puertos desde el navegador. La consulta de divisas la realiza el servidor principal directamente al proveedor externo.
+
+```text
+Navegador
+   └── API principal (127.0.0.1:5000)
+         ├── API de reportes (127.0.0.1:5001)
+         │     └── API principal: /pagos y /facturas
+         └── open.er-api.com (tasas de cambio)
+```
+
+### Rutas nuevas
+
+| Método | Ruta | Acceso | Descripción |
+| --- | --- | --- | --- |
+| **GET** | `/api/reportes/resumen` | JWT | Resumen agregado de pagos, facturas, IVA y top de clientes |
+| **GET** | `/api/reportes/pagos` | JWT | Totales de pagos por estado, método y moneda |
+| **GET** | `/api/reportes/facturas` | JWT | Totales y estados de facturas |
+| **GET** | `/divisas/tasas?base=USD` | JWT | Tasas de la moneda base solicitada |
+| **GET** | `/divisas/convertir?monto=100&de=USD&a=COP` | JWT | Conversión de un monto entre monedas |
+| **GET** | `http://127.0.0.1:5001/health` | Público | Estado del microservicio de reportes |
+
+Las rutas de reportes se consumen desde la pestaña **06 REPORTES** y las de divisas desde **07 DIVISAS**. Ambas APIs requieren el token de sesión, que se envía en la cabecera `Authorization: Bearer <token>`. El conversor consulta `open.er-api.com`; si no hay conexión, responde con tasas locales aproximadas. El crédito requerido por el proveedor se muestra en la pestaña de divisas.
+
+### Variables nuevas de `.env`
+
+| Variable | Valor predeterminado | Descripción |
+| --- | --- | --- |
+| `DIVISAS_API_URL` | `https://open.er-api.com/v6/latest/{BASE}` | URL del proveedor; `{BASE}` se sustituye por la moneda base |
+| `DIVISAS_CACHE_SEGUNDOS` | `3600` | Duración de la caché en memoria por moneda base |
+| `DIVISAS_TIMEOUT` | `5` | Tiempo máximo en segundos para consultar el proveedor de divisas |
+| `REPORTES_BASE_URL` | `http://127.0.0.1:5001` | URL interna del microservicio de reportes |
+
+Estas opciones también están incluidas en `.env.example`. `JWT_SECRET_KEY` debe tener el mismo valor en la API principal y en `reportes_api`.
+
+### Cómo iniciar los dos servicios
+
+Desde la carpeta raíz del proyecto:
+
+```powershell
+python iniciar.py
+```
+
+El lanzador espera a que ambos servicios respondan, imprime sus URLs y detiene los dos procesos al recibir `Ctrl+C`. También se pueden ejecutar en dos terminales:
+
+```powershell
+# Terminal 1, desde la raíz del proyecto
+python main.py
+
+# Terminal 2, desde la raíz del proyecto
+python reportes_api\app.py
+```
+
+### Ejemplos con PowerShell
+
+```powershell
+$login = Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:5000/login `
+  -ContentType 'application/json' `
+  -Body (@{ username = 'admin'; password = 'admin123' } | ConvertTo-Json)
+$headers = @{ Authorization = "Bearer $($login.token)" }
+
+Invoke-RestMethod -Uri http://127.0.0.1:5000/api/reportes/resumen -Headers $headers
+Invoke-RestMethod -Uri 'http://127.0.0.1:5000/divisas/convertir?monto=100&de=USD&a=COP' -Headers $headers
+Invoke-RestMethod -Uri 'http://127.0.0.1:5000/divisas/tasas?base=USD' -Headers $headers
+```
+
+### Solución de problemas
+
+- **Puerto ocupado:** cierra el proceso que utiliza `5000` o `5001` antes de iniciar el proyecto. El lanzador informa si un servicio termina o no responde.
+- **Respuesta `503` en reportes:** comprueba que `reportes_api` esté en ejecución en el puerto `5001` y que `REPORTES_BASE_URL` apunte a esa dirección.
+- **Token expirado o `401`:** vuelve a iniciar sesión y repite la petición con el token nuevo.
+- **Sin internet:** las conversiones continúan funcionando con el respaldo local; sus valores son aproximados y la fuente se identifica en la respuesta. Los reportes se calculan con los datos locales y no dependen de Internet.
 
 ---
 
@@ -126,11 +204,11 @@ py -m venv .venv
 # 2. Instalar dependencias
 pip install -r requirements.txt
 
-# 3. Ejecutar la API
-python main.py
+# 3. Ejecutar ambas APIs
+python iniciar.py
 ```
 
-La API se iniciará en `http://127.0.0.1:5000`.
+La API principal queda disponible en `http://127.0.0.1:5000` y el chequeo del microservicio de reportes en `http://127.0.0.1:5001/health`.
 
 Para ejecutar las pruebas automatizadas:
 ```powershell

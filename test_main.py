@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 import main
 
@@ -13,6 +14,20 @@ PAGO_INICIAL = {
     "estado": "pendiente",
 }
 
+TASAS_SIMULADAS = {
+    "result": "success",
+    "base_code": "USD",
+    "time_last_update_utc": "Tue, 27 Oct 2026 00:00:01 +0000",
+    "rates": {
+        "USD": 1.0,
+        "COP": 4200.0,
+        "EUR": 0.9,
+        "MXN": 18.0,
+        "GBP": 0.8,
+        "BRL": 5.2,
+    },
+}
+
 
 class PasarelaPagosTest(unittest.TestCase):
     def setUp(self):
@@ -20,6 +35,7 @@ class PasarelaPagosTest(unittest.TestCase):
         self.archivo_temporal.close()
         self.bd_original = main.BD_NAME
         main.BD_NAME = self.archivo_temporal.name
+        main._cache_divisas.clear()
         main.init_db()
         main.app.config["TESTING"] = True
         self.cliente = main.app.test_client()
@@ -108,6 +124,123 @@ class PasarelaPagosTest(unittest.TestCase):
         respuesta = self.cliente.post(
             "/login", json={"username": "admin", "password": "incorrecta"}
         )
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_api_info_incluye_nuevos_modulos_y_version(self):
+        respuesta = self.cliente.get("/api")
+
+        self.assertEqual(respuesta.status_code, 200)
+        datos = respuesta.get_json()
+        self.assertEqual(datos["version"], "2.1.0")
+        self.assertIn("divisas", datos["modulos"])
+        self.assertIn("reportes", datos["modulos"])
+
+    def test_login_no_usa_credenciales_en_texto_plano(self):
+        conn = main.get_db()
+        try:
+            conn.execute("DELETE FROM usuarios WHERE username = 'admin'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        respuesta = self.cliente.post(
+            "/login", json={"username": "admin", "password": "admin123"}
+        )
+        self.assertEqual(respuesta.status_code, 401)
+
+    @patch("main.requests.get")
+    def test_divisas_tasas_usa_proveedor_externo(self, mock_get):
+        respuesta_proveedor = Mock()
+        respuesta_proveedor.raise_for_status.return_value = None
+        respuesta_proveedor.json.return_value = TASAS_SIMULADAS
+        mock_get.return_value = respuesta_proveedor
+
+        respuesta = self.cliente.get("/divisas/tasas?base=USD", headers=self.headers)
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.get_json()["base"], "USD")
+        self.assertEqual(respuesta.get_json()["fuente"], "open.er-api.com")
+        self.assertEqual(respuesta.get_json()["tasas"]["COP"], 4200.0)
+        mock_get.assert_called_once_with(
+            "https://open.er-api.com/v6/latest/USD", timeout=5
+        )
+
+    @patch("main.requests.get")
+    def test_divisas_reutiliza_cache(self, mock_get):
+        respuesta_proveedor = Mock()
+        respuesta_proveedor.raise_for_status.return_value = None
+        respuesta_proveedor.json.return_value = TASAS_SIMULADAS
+        mock_get.return_value = respuesta_proveedor
+
+        primera = self.cliente.get("/divisas/tasas?base=USD", headers=self.headers)
+        segunda = self.cliente.get("/divisas/tasas?base=USD", headers=self.headers)
+
+        self.assertEqual(primera.status_code, 200)
+        self.assertEqual(segunda.status_code, 200)
+        mock_get.assert_called_once()
+
+    @patch("main.requests.get", side_effect=main.requests.ConnectionError("sin red"))
+    def test_divisas_usa_respaldo_si_falla_red(self, mock_get):
+        respuesta = self.cliente.get(
+            "/divisas/convertir?monto=100&de=USD&a=COP", headers=self.headers
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.get_json()["fuente"], "respaldo_local")
+        self.assertEqual(respuesta.get_json()["resultado"], 430000.0)
+        mock_get.assert_called_once()
+
+    def test_divisas_requiere_token(self):
+        respuesta = self.cliente.get("/divisas/tasas?base=USD")
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_divisas_rechaza_monto_invalido(self):
+        respuesta = self.cliente.get(
+            "/divisas/convertir?monto=nan&de=USD&a=COP", headers=self.headers
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("monto", respuesta.get_json()["error"])
+
+    def test_divisas_rechaza_moneda_desconocida(self):
+        respuesta = self.cliente.get(
+            "/divisas/tasas?base=XYZ", headers=self.headers
+        )
+        self.assertEqual(respuesta.status_code, 400)
+
+    @patch("main.requests.get")
+    def test_proxy_reportes_reenvia_token_y_respuesta(self, mock_get):
+        respuesta_microservicio = Mock()
+        respuesta_microservicio.status_code = 200
+        respuesta_microservicio.json.return_value = {"pagos": {"total_transacciones": 3}}
+        mock_get.return_value = respuesta_microservicio
+
+        respuesta = self.cliente.get(
+            "/api/reportes/resumen", headers=self.headers
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.get_json()["pagos"]["total_transacciones"], 3)
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:5001/reportes/resumen",
+            headers=self.headers,
+            timeout=5,
+        )
+
+    @patch(
+        "main.requests.get",
+        side_effect=main.requests.ConnectionError("servicio caído"),
+    )
+    def test_proxy_reportes_devuelve_503_si_servicio_no_responde(self, mock_get):
+        respuesta = self.cliente.get(
+            "/api/reportes/pagos", headers=self.headers
+        )
+
+        self.assertEqual(respuesta.status_code, 503)
+        self.assertIn("reportes_api", respuesta.get_json()["error"])
+        mock_get.assert_called_once()
+
+    def test_proxy_reportes_requiere_token(self):
+        respuesta = self.cliente.get("/api/reportes/resumen")
         self.assertEqual(respuesta.status_code, 401)
 
     def test_sistema_roles_y_permisos_usuario(self):
@@ -296,7 +429,68 @@ class PasarelaPagosTest(unittest.TestCase):
             404,
         )
 
+    def test_usuario_solo_consulta_facturas_propias(self):
+        factura_admin = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Factura de administración",
+                "moneda": "COP",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 10}
+                ],
+            },
+            headers=self.headers,
+        ).get_json()
+        respuesta_usuario = self.cliente.post(
+            "/login", json={"username": "usuario", "password": "usuario123"}
+        )
+        token_usuario = respuesta_usuario.get_json()["token"]
+        headers_usuario = {"Authorization": f"Bearer {token_usuario}"}
+        factura_usuario = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Factura del usuario",
+                "moneda": "COP",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 20}
+                ],
+            },
+            headers=headers_usuario,
+        ).get_json()
+
+        listado_usuario = self.cliente.get("/facturas", headers=headers_usuario)
+        ids_usuario = [factura["id"] for factura in listado_usuario.get_json()]
+        self.assertEqual(ids_usuario, [factura_usuario["id"]])
+        self.assertEqual(
+            self.cliente.get(
+                f"/facturas/{factura_usuario['id']}", headers=headers_usuario
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.cliente.get(
+                f"/facturas/{factura_usuario['id']}/json", headers=headers_usuario
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.cliente.get(
+                f"/facturas/{factura_admin['id']}", headers=headers_usuario
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.cliente.get(
+                f"/facturas/{factura_admin['id']}/json", headers=headers_usuario
+            ).status_code,
+            404,
+        )
+        listado_admin = self.cliente.get("/facturas", headers=self.headers)
+        self.assertEqual(listado_admin.status_code, 200)
+        ids_admin = [factura["id"] for factura in listado_admin.get_json()]
+        self.assertIn(factura_admin["id"], ids_admin)
+        self.assertIn(factura_usuario["id"], ids_admin)
+
 
 if __name__ == "__main__":
     unittest.main()
-

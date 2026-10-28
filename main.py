@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import time
 from functools import wraps
 
 from dotenv import load_dotenv
 import jwt
+import requests
 from flask import Flask, jsonify, render_template, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -17,10 +19,30 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-BD_NAME = os.environ.get("BD_NAME", "main.db")
+BD_NAME = Path(os.environ.get("BD_NAME", "main.db"))
+if not BD_NAME.is_absolute():
+    BD_NAME = BASE_DIR / BD_NAME
+DIVISAS_API_URL = os.environ.get(
+    "DIVISAS_API_URL", "https://open.er-api.com/v6/latest/{BASE}"
+)
+DIVISAS_CACHE_SEGUNDOS = float(os.environ.get("DIVISAS_CACHE_SEGUNDOS", 3600))
+DIVISAS_TIMEOUT = float(os.environ.get("DIVISAS_TIMEOUT", 5))
+REPORTES_BASE_URL = os.environ.get(
+    "REPORTES_BASE_URL", "http://127.0.0.1:5001"
+).rstrip("/")
 METODOS_PAGO = {"tarjeta", "transferencia", "efectivo"}
 ESTADOS_PAGO = {"pendiente", "aprobado", "rechazado"}
 CAMPOS_PAGO = {"cliente", "monto", "moneda", "metodo_pago", "estado"}
+MONEDAS_DIVISAS = {"USD", "COP", "EUR", "MXN", "GBP", "BRL"}
+TASAS_RESPALDO_USD = {
+    "USD": 1.0,
+    "COP": 4300.0,
+    "EUR": 0.92,
+    "MXN": 17.1,
+    "GBP": 0.79,
+    "BRL": 5.0,
+}
+_cache_divisas = {}
 
 ROLES_VALIDOS = {"admin", "usuario"}
 ESTADOS_FACTURA = {"emitida", "pagada", "anulada"}
@@ -32,14 +54,6 @@ app.config["SECRET_KEY"] = os.environ.get(
 app.config["JWT_EXPIRATION_HOURS"] = int(
     os.environ.get("JWT_EXPIRATION_HOURS", 2)
 )
-
-# Diccionario de respaldo en memoria (compatibilidad retroactiva)
-USUARIOS = {
-    os.environ.get("ADMIN_USERNAME", "admin"): os.environ.get(
-        "ADMIN_PASSWORD", "admin123"
-    )
-}
-
 
 def get_db():
     conn = sqlite3.connect(BD_NAME)
@@ -152,8 +166,7 @@ def init_db():
 
 def autenticar_usuario(usuario, contrasena):
     """
-    Verifica las credenciales del usuario consultando la base de datos
-    o el diccionario en memoria.
+    Verifica las credenciales del usuario consultando la base de datos.
     """
     conn = get_db()
     try:
@@ -166,11 +179,6 @@ def autenticar_usuario(usuario, contrasena):
             clave_almacenada = fila_dict["password"]
             if check_password_hash(clave_almacenada, contrasena):
                 return fila_dict
-
-        # Fallback para pruebas o compatibilidad con USUARIOS
-        if USUARIOS.get(usuario) == contrasena:
-            rol = "admin" if usuario == "admin" else "usuario"
-            return {"id": 0, "username": usuario, "rol": rol, "email": None}
 
         return None
     finally:
@@ -249,6 +257,102 @@ def token_requerido(func_o_roles=None, roles=None):
 def solo_admin(func):
     """Atajo decorador para rutas exclusivas de administradores."""
     return token_requerido(roles=["admin"])(func)
+
+
+def obtener_tasas_divisas(moneda_base):
+    ahora = time.monotonic()
+    tasas_en_cache = _cache_divisas.get(moneda_base)
+    if tasas_en_cache and ahora - tasas_en_cache["guardado_en"] < DIVISAS_CACHE_SEGUNDOS:
+        return tasas_en_cache["datos"]
+
+    url = (
+        DIVISAS_API_URL.format(BASE=moneda_base)
+        if "{BASE}" in DIVISAS_API_URL
+        else f"{DIVISAS_API_URL.rstrip('/')}/{moneda_base}"
+    )
+    try:
+        respuesta = requests.get(url, timeout=DIVISAS_TIMEOUT)
+        respuesta.raise_for_status()
+        datos = respuesta.json()
+        if not isinstance(datos, dict) or datos.get("result") != "success":
+            raise ValueError("Respuesta inválida del proveedor de divisas")
+
+        tasas_recibidas = datos.get("rates")
+        base_recibida = datos.get("base_code")
+        if not isinstance(tasas_recibidas, dict) or base_recibida != moneda_base:
+            raise ValueError("Respuesta incompleta del proveedor de divisas")
+
+        tasas = {}
+        for moneda in MONEDAS_DIVISAS:
+            valor = tasas_recibidas.get(moneda)
+            if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+                raise ValueError("El proveedor no devolvió todas las tasas necesarias")
+            if not math.isfinite(valor) or valor <= 0:
+                raise ValueError("El proveedor devolvió una tasa inválida")
+            tasas[moneda] = float(valor)
+
+        fecha_actualizacion = datos.get("time_last_update_utc")
+        if not isinstance(fecha_actualizacion, str) or not fecha_actualizacion.strip():
+            raise ValueError("El proveedor no devolvió la fecha de actualización")
+        resultado = {
+            "base": moneda_base,
+            "fecha_actualizacion": fecha_actualizacion,
+            "fuente": "open.er-api.com",
+            "tasas": tasas,
+        }
+    except (requests.RequestException, ValueError, TypeError, OverflowError):
+        tasas_base_usd = TASAS_RESPALDO_USD[moneda_base]
+        resultado = {
+            "base": moneda_base,
+            "fecha_actualizacion": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
+            "fuente": "respaldo_local",
+            "tasas": {
+                moneda: round(tasa / tasas_base_usd, 8)
+                for moneda, tasa in TASAS_RESPALDO_USD.items()
+            },
+        }
+
+    _cache_divisas[moneda_base] = {"guardado_en": ahora, "datos": resultado}
+    return resultado
+
+
+def validar_moneda_divisas(valor, nombre):
+    if not isinstance(valor, str) or not re.fullmatch(r"[A-Za-z]{3}", valor):
+        return None, f"El parámetro '{nombre}' debe ser un código de moneda de tres letras"
+    moneda = valor.upper()
+    if moneda not in MONEDAS_DIVISAS:
+        return None, f"La moneda '{moneda}' no está disponible"
+    return moneda, None
+
+
+def reenviar_a_reportes(recurso):
+    try:
+        respuesta = requests.get(
+            f"{REPORTES_BASE_URL}/reportes/{recurso}",
+            headers={"Authorization": request.headers.get("Authorization", "")},
+            timeout=5,
+        )
+    except requests.RequestException:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "El servicio de reportes no está en ejecución. "
+                        "Inicia reportes_api (puerto 5001)."
+                    )
+                }
+            ),
+            503,
+        )
+    try:
+        return jsonify(respuesta.json()), respuesta.status_code
+    except ValueError:
+        return (
+            jsonify({"error": "El servicio de reportes devolvió una respuesta inválida"}),
+            502,
+        )
 
 
 def validar_pago(data):
@@ -486,9 +590,16 @@ def inicio():
         return jsonify(
             {
                 "mensaje": "API de pasarela de pagos simulados y facturación",
-                "version": "2.0.0",
+                "version": "2.1.0",
                 "roles_soportados": sorted(list(ROLES_VALIDOS)),
-                "modulos": ["pagos", "facturas", "usuarios", "autenticacion"],
+                "modulos": [
+                    "pagos",
+                    "facturas",
+                    "usuarios",
+                    "autenticacion",
+                    "divisas",
+                    "reportes",
+                ],
             }
         )
     return render_template("index.html")
@@ -504,11 +615,83 @@ def api_info():
     return jsonify(
         {
             "mensaje": "API de pasarela de pagos simulados y facturación",
-            "version": "2.0.0",
+            "version": "2.1.0",
             "roles_soportados": sorted(list(ROLES_VALIDOS)),
-            "modulos": ["pagos", "facturas", "usuarios", "autenticacion"],
+            "modulos": [
+                "pagos",
+                "facturas",
+                "usuarios",
+                "autenticacion",
+                "divisas",
+                "reportes",
+            ],
         }
     )
+
+
+@app.route("/divisas/tasas", methods=["GET"])
+@token_requerido
+def consultar_tasas_divisas():
+    moneda, error = validar_moneda_divisas(request.args.get("base", "USD"), "base")
+    if error:
+        return jsonify({"error": error}), 400
+    return jsonify(obtener_tasas_divisas(moneda)), 200
+
+
+@app.route("/divisas/convertir", methods=["GET"])
+@token_requerido
+def convertir_divisas():
+    monto_texto = request.args.get("monto")
+    try:
+        monto = float(monto_texto)
+        monto_valido = math.isfinite(monto) and monto > 0
+    except (TypeError, ValueError, OverflowError):
+        monto_valido = False
+        monto = 0.0
+    if not monto_valido:
+        return jsonify({"error": "El parámetro 'monto' debe ser un número finito mayor que cero"}), 400
+
+    moneda_origen, error = validar_moneda_divisas(request.args.get("de"), "de")
+    if error:
+        return jsonify({"error": error}), 400
+    moneda_destino, error = validar_moneda_divisas(request.args.get("a"), "a")
+    if error:
+        return jsonify({"error": error}), 400
+
+    datos_tasas = obtener_tasas_divisas(moneda_origen)
+    tasa = datos_tasas["tasas"][moneda_destino]
+    return (
+        jsonify(
+            {
+                "monto": monto,
+                "de": moneda_origen,
+                "a": moneda_destino,
+                "tasa": tasa,
+                "resultado": round(monto * tasa, 2),
+                "fuente": datos_tasas["fuente"],
+                "fecha_actualizacion": datos_tasas["fecha_actualizacion"],
+            }
+        ),
+        200,
+    )
+
+
+@app.route("/api/reportes/resumen", methods=["GET"])
+@token_requerido
+def proxy_reporte_resumen():
+    return reenviar_a_reportes("resumen")
+
+
+@app.route("/api/reportes/pagos", methods=["GET"])
+@token_requerido
+def proxy_reporte_pagos():
+    return reenviar_a_reportes("pagos")
+
+
+@app.route("/api/reportes/facturas", methods=["GET"])
+@token_requerido
+def proxy_reporte_facturas():
+    return reenviar_a_reportes("facturas")
 
 
 @app.route("/login", methods=["POST"])
@@ -878,6 +1061,9 @@ def listar_facturas():
     if pago_id:
         condiciones.append("pago_id = ?")
         valores.append(pago_id)
+    if request.usuario_actual.get("rol") != "admin":
+        condiciones.append("creado_por = ?")
+        valores.append(request.usuario_actual.get("user", ""))
 
     query = "SELECT * FROM facturas"
     if condiciones:
@@ -899,9 +1085,12 @@ def consultar_factura(factura_id):
     """Consulta una factura específica por su identificador en formato JSON."""
     conn = get_db()
     try:
-        fila = conn.execute(
-            "SELECT * FROM facturas WHERE id = ?", (factura_id,)
-        ).fetchone()
+        consulta = "SELECT * FROM facturas WHERE id = ?"
+        valores = [factura_id]
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " AND creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        fila = conn.execute(consulta, valores).fetchone()
         if not fila:
             return jsonify({"error": "No existe una factura con ese id"}), 404
         return jsonify(formatear_factura(dict(fila))), 200
@@ -918,9 +1107,12 @@ def consultar_factura_formato_estandar(factura_id):
     """
     conn = get_db()
     try:
-        fila = conn.execute(
-            "SELECT * FROM facturas WHERE id = ?", (factura_id,)
-        ).fetchone()
+        consulta = "SELECT * FROM facturas WHERE id = ?"
+        valores = [factura_id]
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " AND creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        fila = conn.execute(consulta, valores).fetchone()
         if not fila:
             return jsonify({"error": "No existe una factura con ese id"}), 404
 

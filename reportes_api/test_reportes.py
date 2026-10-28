@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-os.environ["JWT_SECRET_KEY"] = "clave-de-prueba-reportes"
+os.environ["JWT_SECRET_KEY"] = "clave-de-prueba-reportes-segura-2026"
 os.environ["PASARELA_BASE_URL"] = "http://pasarela-simulada"
 
 import jwt
@@ -11,8 +11,8 @@ import app as reportes_app
 
 
 PAGOS_SIMULADOS = [
-    {"id": 1, "monto": 100.0, "metodo_pago": "tarjeta", "estado": "aprobado"},
-    {"id": 2, "monto": 50.0, "metodo_pago": "efectivo", "estado": "pendiente"},
+    {"id": 1, "monto": 100.0, "moneda": "COP", "metodo_pago": "tarjeta", "estado": "aprobado"},
+    {"id": 2, "monto": 50.0, "moneda": "USD", "metodo_pago": "efectivo", "estado": "pendiente"},
 ]
 
 FACTURAS_SIMULADAS = [
@@ -70,6 +70,8 @@ class ReportesApiTest(unittest.TestCase):
         self.assertEqual(data["por_estado"]["aprobado"], 1)
         self.assertEqual(data["por_estado"]["pendiente"], 1)
         self.assertEqual(data["por_metodo"]["tarjeta"], 1)
+        self.assertEqual(data["por_moneda"]["COP"], {"cantidad": 1, "monto": 100.0})
+        self.assertEqual(data["por_moneda"]["USD"], {"cantidad": 1, "monto": 50.0})
 
     @patch("app.requests.get")
     def test_reporte_facturas_calcula_totales_y_top_clientes(self, mock_get):
