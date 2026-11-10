@@ -1131,6 +1131,167 @@ def listar_usuarios():
         conn.close()
 
 
+@app.route("/usuarios/<int:usuario_id>", methods=["GET"])
+@solo_admin
+def consultar_usuario(usuario_id):
+    """Consulta el detalle de un usuario específico por su identificador (solo admin)."""
+    conn = get_db()
+    try:
+        fila = conn.execute(
+            "SELECT id, username, rol, email, fecha_creacion FROM usuarios WHERE id = ?",
+            (usuario_id,),
+        ).fetchone()
+        if not fila:
+            return jsonify({"error": "No existe un usuario con ese id"}), 404
+        return jsonify(dict(fila)), 200
+    finally:
+        conn.close()
+
+
+@app.route("/usuarios", methods=["POST"])
+@solo_admin
+def crear_usuario_admin():
+    """Permite al administrador crear un nuevo usuario con rol específico."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "El cuerpo debe ser un objeto JSON"}), 400
+
+    username = data.get("username")
+    password = data.get("password")
+    email = data.get("email")
+    rol = data.get("rol", "usuario")
+
+    if not isinstance(username, str) or not username.strip() or len(username.strip()) < 3:
+        return jsonify({"error": "El 'username' debe tener al menos 3 caracteres"}), 400
+
+    if not isinstance(password, str) or len(password) < 4:
+        return jsonify({"error": "El 'password' debe tener al menos 4 caracteres"}), 400
+
+    if rol not in ROLES_VALIDOS:
+        return jsonify({"error": f"El rol debe ser uno de: {', '.join(sorted(ROLES_VALIDOS))}"}), 400
+
+    conn = get_db()
+    try:
+        cursor_check = conn.execute(
+            "SELECT id FROM usuarios WHERE username = ?", (username.strip(),)
+        )
+        if cursor_check.fetchone():
+            return jsonify({"error": "Ya existe un usuario con ese nombre de usuario"}), 409
+
+        hashed = generate_password_hash(password)
+        email_limpio = email.strip() if isinstance(email, str) and email.strip() else None
+        cursor_insert = conn.execute(
+            """
+            INSERT INTO usuarios (username, password, rol, email)
+            VALUES (?, ?, ?, ?)
+            """,
+            (username.strip(), hashed, rol, email_limpio),
+        )
+        conn.commit()
+        nuevo_id = cursor_insert.lastrowid
+
+        fila = conn.execute(
+            "SELECT id, username, rol, email, fecha_creacion FROM usuarios WHERE id = ?",
+            (nuevo_id,),
+        ).fetchone()
+        return jsonify(dict(fila)), 201
+    finally:
+        conn.close()
+
+
+@app.route("/usuarios/<int:usuario_id>", methods=["PUT"])
+@solo_admin
+def actualizar_usuario(usuario_id):
+    """Permite al administrador actualizar email, rol o cambiar la contraseña de un usuario."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "El cuerpo debe ser un objeto JSON"}), 400
+
+    conn = get_db()
+    try:
+        fila = conn.execute(
+            "SELECT id, username, rol, email FROM usuarios WHERE id = ?",
+            (usuario_id,),
+        ).fetchone()
+        if not fila:
+            return jsonify({"error": "No existe un usuario con ese id"}), 404
+
+        usuario_existente = dict(fila)
+        admin_actual = getattr(request, "usuario_actual", {}).get("user")
+
+        nuevo_rol = data.get("rol", usuario_existente["rol"])
+        if nuevo_rol not in ROLES_VALIDOS:
+            return jsonify({"error": f"El rol debe ser uno de: {', '.join(sorted(ROLES_VALIDOS))}"}), 400
+
+        # Si el usuario es el administrador en sesión, no permitir quitarse el rol de admin
+        if usuario_existente["username"] == admin_actual and nuevo_rol != "admin":
+            return jsonify({"error": "No puedes revocar tu propio rol de administrador"}), 400
+
+        email = data.get("email")
+        if email is not None and isinstance(email, str):
+            email_limpio = email.strip() or None
+        else:
+            email_limpio = usuario_existente["email"]
+
+        nuevo_password = data.get("password")
+        if nuevo_password:
+            if not isinstance(nuevo_password, str) or len(nuevo_password) < 4:
+                return jsonify({"error": "El nuevo 'password' debe tener al menos 4 caracteres"}), 400
+            hashed_pass = generate_password_hash(nuevo_password)
+            conn.execute(
+                "UPDATE usuarios SET email = ?, rol = ?, password = ? WHERE id = ?",
+                (email_limpio, nuevo_rol, hashed_pass, usuario_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE usuarios SET email = ?, rol = ? WHERE id = ?",
+                (email_limpio, nuevo_rol, usuario_id),
+            )
+        conn.commit()
+
+        fila_act = conn.execute(
+            "SELECT id, username, rol, email, fecha_creacion FROM usuarios WHERE id = ?",
+            (usuario_id,),
+        ).fetchone()
+        return jsonify(dict(fila_act)), 200
+    finally:
+        conn.close()
+
+
+@app.route("/usuarios/<int:usuario_id>", methods=["DELETE"])
+@solo_admin
+def eliminar_usuario(usuario_id):
+    """Permite al administrador eliminar un usuario (evitando auto-eliminación o eliminar el último admin)."""
+    conn = get_db()
+    try:
+        fila = conn.execute(
+            "SELECT id, username, rol FROM usuarios WHERE id = ?", (usuario_id,)
+        ).fetchone()
+        if not fila:
+            return jsonify({"error": "No existe un usuario con ese id"}), 404
+
+        usuario_dict = dict(fila)
+        admin_actual = getattr(request, "usuario_actual", {}).get("user")
+
+        if usuario_dict["username"] == admin_actual:
+            return jsonify({"error": "No puedes eliminar tu propia cuenta de administrador activa"}), 400
+
+        if usuario_dict["rol"] == "admin":
+            total_admins = conn.execute(
+                "SELECT COUNT(*) as c FROM usuarios WHERE rol = 'admin'"
+            ).fetchone()["c"]
+            if total_admins <= 1:
+                return jsonify({"error": "No se puede eliminar el único administrador del sistema"}), 400
+
+        conn.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+        conn.commit()
+        return jsonify({
+            "mensaje": f"Usuario '{usuario_dict['username']}' eliminado correctamente"
+        }), 200
+    finally:
+        conn.close()
+
+
 # ==============================================================================
 # RUTAS DE PAGOS (CRUD)
 # ==============================================================================

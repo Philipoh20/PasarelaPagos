@@ -77,6 +77,10 @@ Además, el endpoint `GET /facturas/<id>/json` genera el documento normalizado d
 | **POST** | `/registro` | Público | - | Registrar nuevo usuario (por defecto rol `usuario`) |
 | **GET** | `/auth/me` | JWT | `usuario` / `admin` | Consultar perfil y rol del token actual |
 | **GET** | `/usuarios` | JWT | `admin` | Listar todos los usuarios registrados |
+| **GET** | /usuarios/<id> | JWT | dmin | Consultar detalle de un usuario específico |
+| **POST** | /usuarios | JWT | dmin | Crear usuario con rol asignado (dmin o usuario) |
+| **PUT** | /usuarios/<id> | JWT | dmin | Modificar email, rol o cambiar contraseña |
+| **DELETE** | /usuarios/<id> | JWT | dmin | Eliminar usuario (protegido contra auto-eliminación) |
 | **GET** | `/pagos` | JWT | `usuario` / `admin` | Listar pagos propios; el administrador ve todos |
 | **GET** | `/pagos/<id>` | JWT | `usuario` / `admin` | Consultar pago propio; el administrador puede consultar cualquiera |
 | **POST** | `/pagos` | JWT | `usuario` / `admin` | Registrar un nuevo pago |

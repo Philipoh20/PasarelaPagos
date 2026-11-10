@@ -773,6 +773,71 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertIn(factura_admin["id"], ids_admin)
         self.assertIn(factura_usuario["id"], ids_admin)
 
+    def test_crud_completo_usuarios_admin(self):
+        # 1. Crear nuevo usuario desde el endpoint administrativo
+        nuevo = self.cliente.post(
+            "/usuarios",
+            json={
+                "username": "empleado1",
+                "password": "password123",
+                "email": "empleado1@test.com",
+                "rol": "usuario",
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(nuevo.status_code, 201)
+        usuario_creado = nuevo.get_json()
+        u_id = usuario_creado["id"]
+        self.assertEqual(usuario_creado["username"], "empleado1")
+        self.assertEqual(usuario_creado["rol"], "usuario")
+
+        # 2. Consultar usuario por ID
+        detalle = self.cliente.get(f"/usuarios/{u_id}", headers=self.headers)
+        self.assertEqual(detalle.status_code, 200)
+        self.assertEqual(detalle.get_json()["email"], "empleado1@test.com")
+
+        # 3. Actualizar usuario (rol y email)
+        act = self.cliente.put(
+            f"/usuarios/{u_id}",
+            json={"email": "empleado_actualizado@test.com", "rol": "admin"},
+            headers=self.headers,
+        )
+        self.assertEqual(act.status_code, 200)
+        self.assertEqual(act.get_json()["email"], "empleado_actualizado@test.com")
+        self.assertEqual(act.get_json()["rol"], "admin")
+
+        # 4. Restricción de permisos para usuario regular
+        token_usuario = self.cliente.post(
+            "/login", json={"username": "usuario", "password": "usuario123"}
+        ).get_json()["token"]
+        headers_usr = {"Authorization": f"Bearer {token_usuario}"}
+
+        self.assertEqual(
+            self.cliente.post("/usuarios", json={"username": "hacker", "password": "123"}, headers=headers_usr).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.cliente.put(f"/usuarios/{u_id}", json={"rol": "usuario"}, headers=headers_usr).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.cliente.delete(f"/usuarios/{u_id}", headers=headers_usr).status_code,
+            403,
+        )
+
+        # 5. Evitar auto-eliminación del admin en sesión
+        admin_info = self.cliente.get("/usuarios", headers=self.headers).get_json()
+        admin_id = next(u["id"] for u in admin_info if u["username"] == "admin")
+        self.assertEqual(
+            self.cliente.delete(f"/usuarios/{admin_id}", headers=self.headers).status_code,
+            400,
+        )
+
+        # 6. Eliminar usuario exitosamente por admin
+        elim = self.cliente.delete(f"/usuarios/{u_id}", headers=self.headers)
+        self.assertEqual(elim.status_code, 200)
+        self.assertEqual(self.cliente.get(f"/usuarios/{u_id}", headers=self.headers).status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
