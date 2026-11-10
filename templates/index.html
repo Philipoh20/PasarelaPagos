@@ -262,7 +262,7 @@
       <!-- Métricas Minimalistas en Bloques Tipográficos -->
       <div class="stats-row">
         <div class="stat-block">
-          <span class="stat-label">TOTAL PROCESADO</span>
+          <span class="stat-label">TOTAL POR MONEDA</span>
           <span class="stat-number" id="metric-total-monto">$0.00</span>
           <span class="stat-sub" id="metric-total-pagos-count">0 pagos en total</span>
         </div>
@@ -324,12 +324,12 @@
     <section class="tab-pane" id="tab-facturas">
       
       <div class="editorial-hero">
-        <div class="hero-label">03 / FACTURACIÓN ELECTRÓNICA</div>
+        <div class="hero-label">03 / FACTURACIÓN JSON</div>
         <div class="hero-flex">
           <div>
             <h1 class="hero-title">FACTURACIÓN EN FORMATO JSON</h1>
             <p class="hero-subtitle">
-              Generación de facturas estructuradas con desglose de ítems, cálculo automático de IVA y firma de integridad SHA-256.
+              Emisión de documentos de factura demostrativos, con desglose de ítems, cálculo de impuestos y hash de integridad SHA-256.
             </p>
           </div>
           <button type="button" class="btn-solid" id="btn-abrir-modal-factura">
@@ -341,14 +341,14 @@
       <!-- Métricas Facturación -->
       <div class="stats-row">
         <div class="stat-block">
-          <span class="stat-label">TOTAL FACTURADO</span>
+          <span class="stat-label">TOTAL FACTURADO POR MONEDA</span>
           <span class="stat-number" id="metric-facturado-total">$0.00</span>
           <span class="stat-sub" id="metric-facturas-count">0 facturas emitidas</span>
         </div>
         <div class="stat-block">
-          <span class="stat-label">IMPUESTO IVA LIQUIDADO</span>
+          <span class="stat-label">IMPUESTO POR MONEDA</span>
           <span class="stat-number" id="metric-facturado-iva">$0.00</span>
-          <span class="stat-sub">Tarifa estándar aplicada</span>
+          <span class="stat-sub">Excluye facturas anuladas</span>
         </div>
         <div class="stat-block">
           <span class="stat-label">FACTURAS PAGADAS</span>
@@ -555,17 +555,18 @@
             <span class="stat-number" id="reporte-total-transacciones">—</span>
           </div>
           <div class="stat-block">
-            <span class="stat-label">MONTO TOTAL REGISTRADO</span>
+            <span class="stat-label">MONTO REGISTRADO POR MONEDA</span>
             <span class="stat-number" id="reporte-monto-total">—</span>
-            <span class="stat-sub">Suma de los montos en sus monedas originales</span>
+            <span class="stat-sub">No se suman divisas diferentes</span>
           </div>
           <div class="stat-block">
             <span class="stat-label">FACTURAS</span>
             <span class="stat-number" id="reporte-total-facturas">—</span>
           </div>
           <div class="stat-block">
-            <span class="stat-label">IVA RECAUDADO</span>
+            <span class="stat-label">IVA POR MONEDA</span>
             <span class="stat-number" id="reporte-total-iva">—</span>
+            <span class="stat-sub">Excluye facturas anuladas</span>
           </div>
         </div>
 
@@ -590,7 +591,13 @@
           </div>
           <div class="table-frame">
             <table class="editorial-table">
-              <thead><tr><th>TOP CLIENTES</th><th class="text-right">TOTAL FACTURADO</th></tr></thead>
+              <thead><tr><th>FACTURAS POR MONEDA</th><th class="text-right">TOTAL</th><th class="text-right">IVA</th></tr></thead>
+              <tbody id="reporte-facturas-por-moneda"><tr><td colspan="3">Sin datos</td></tr></tbody>
+            </table>
+          </div>
+          <div class="table-frame">
+            <table class="editorial-table">
+              <thead><tr><th>TOP CLIENTES POR MONEDA</th><th class="text-right">TOTAL FACTURADO</th></tr></thead>
               <tbody id="reporte-top-clientes"><tr><td colspan="2">Sin datos</td></tr></tbody>
             </table>
           </div>
@@ -680,7 +687,11 @@
                 <option value="COP">COP</option>
                 <option value="USD">USD</option>
                 <option value="EUR">EUR</option>
+                <option value="MXN">MXN</option>
+                <option value="GBP">GBP</option>
+                <option value="BRL">BRL</option>
               </select>
+              <small class="text-muted">Al asociar un pago, otra moneda convierte sus importes y guarda la tasa aplicada.</small>
             </div>
           </div>
           <div class="form-grid-2">
@@ -833,6 +844,6 @@
   <div class="toast-stack" id="toast-container"></div>
 
   <!-- Script JS -->
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=2"></script>
 </body>
 </html>

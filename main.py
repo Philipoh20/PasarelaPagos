@@ -3,11 +3,12 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import re
 import sqlite3
 import time
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
+from pathlib import Path
 
 from dotenv import load_dotenv
 import jwt
@@ -15,7 +16,6 @@ import requests
 from flask import Flask, jsonify, render_template, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
-# Cargar variables de entorno desde el archivo .env si existe
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -27,9 +27,15 @@ DIVISAS_API_URL = os.environ.get(
 )
 DIVISAS_CACHE_SEGUNDOS = float(os.environ.get("DIVISAS_CACHE_SEGUNDOS", 3600))
 DIVISAS_TIMEOUT = float(os.environ.get("DIVISAS_TIMEOUT", 5))
-REPORTES_BASE_URL = os.environ.get(
-    "REPORTES_BASE_URL", "http://127.0.0.1:5001"
-).rstrip("/")
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "").strip()
+if APP_ENV == "production" and (
+    len(JWT_SECRET_KEY) < 32
+    or JWT_SECRET_KEY == "cambia_esta_clave_por_una_secreta_y_segura_en_produccion"
+):
+    raise RuntimeError(
+        "En producción, JWT_SECRET_KEY debe configurarse con al menos 32 caracteres"
+    )
 METODOS_PAGO = {"tarjeta", "transferencia", "efectivo"}
 ESTADOS_PAGO = {"pendiente", "aprobado", "rechazado"}
 CAMPOS_PAGO = {"cliente", "monto", "moneda", "metodo_pago", "estado"}
@@ -48,12 +54,13 @@ ROLES_VALIDOS = {"admin", "usuario"}
 ESTADOS_FACTURA = {"emitida", "pagada", "anulada"}
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get(
-    "JWT_SECRET_KEY", "clave-local-de-desarrollo-cambiar-en-produccion"
+app.config["SECRET_KEY"] = (
+    JWT_SECRET_KEY or "clave-local-de-desarrollo-cambiar-en-produccion"
 )
 app.config["JWT_EXPIRATION_HOURS"] = int(
     os.environ.get("JWT_EXPIRATION_HOURS", 2)
 )
+
 
 def get_db():
     conn = sqlite3.connect(BD_NAME)
@@ -123,34 +130,74 @@ def init_db():
             )
             """
         )
+        info_facturas = conn.execute("PRAGMA table_info(facturas)").fetchall()
+        columnas_facturas = [col["name"] for col in info_facturas]
+        for columna, tipo in (
+            ("moneda_origen", "TEXT"),
+            ("tasa_conversion", "REAL"),
+            ("fuente_tasa", "TEXT"),
+            ("fecha_tasa", "TEXT"),
+        ):
+            if columna not in columnas_facturas:
+                conn.execute(f"ALTER TABLE facturas ADD COLUMN {columna} {tipo}")
         conn.commit()
 
         # Sembrar usuario admin inicial desde .env si no existe
-        admin_user = os.environ.get("ADMIN_USERNAME", "admin")
-        admin_pass = os.environ.get("ADMIN_PASSWORD", "admin123")
-        admin_email = os.environ.get("ADMIN_EMAIL", "admin@pasarela.local")
-        cursor = conn.execute(
-            "SELECT id FROM usuarios WHERE username = ?", (admin_user,)
+        admin_user = os.environ.get(
+            "ADMIN_USERNAME", None if APP_ENV == "production" else "admin"
         )
-        if not cursor.fetchone():
-            hashed_admin = generate_password_hash(admin_pass)
-            conn.execute(
-                """
-                INSERT INTO usuarios (username, password, rol, email)
-                VALUES (?, ?, 'admin', ?)
-                """,
-                (admin_user, hashed_admin, admin_email),
+        admin_pass = os.environ.get(
+            "ADMIN_PASSWORD", None if APP_ENV == "production" else "admin123"
+        )
+        admin_email = os.environ.get("ADMIN_EMAIL", "admin@pasarela.local")
+        if admin_user:
+            cursor_admin = conn.execute(
+                "SELECT id FROM usuarios WHERE username = ?", (admin_user,)
             )
-            conn.commit()
+            if not cursor_admin.fetchone():
+                if not admin_pass:
+                    raise RuntimeError(
+                        "Configura ADMIN_USERNAME y ADMIN_PASSWORD para crear el primer administrador"
+                    )
+                if APP_ENV == "production" and (
+                    len(admin_pass) < 12
+                    or admin_pass == "cambiar_password_admin"
+                ):
+                    raise RuntimeError(
+                        "ADMIN_PASSWORD debe tener al menos 12 caracteres en producción"
+                    )
+                hashed_admin = generate_password_hash(admin_pass)
+                conn.execute(
+                    """
+                    INSERT INTO usuarios (username, password, rol, email)
+                    VALUES (?, ?, 'admin', ?)
+                    """,
+                    (admin_user, hashed_admin, admin_email),
+                )
+                conn.commit()
+        elif APP_ENV == "production" and not conn.execute(
+            "SELECT id FROM usuarios WHERE rol = 'admin' LIMIT 1"
+        ).fetchone():
+            raise RuntimeError(
+                "Configura ADMIN_USERNAME y ADMIN_PASSWORD para crear el primer administrador"
+            )
 
         # Sembrar usuario regular inicial desde .env si no existe
-        demo_user = os.environ.get("USER_USERNAME", "usuario")
-        demo_pass = os.environ.get("USER_PASSWORD", "usuario123")
-        demo_email = os.environ.get("USER_EMAIL", "usuario@pasarela.local")
-        cursor_user = conn.execute(
-            "SELECT id FROM usuarios WHERE username = ?", (demo_user,)
+        demo_user = os.environ.get(
+            "USER_USERNAME", None if APP_ENV == "production" else "usuario"
         )
-        if not cursor_user.fetchone():
+        demo_pass = os.environ.get(
+            "USER_PASSWORD", None if APP_ENV == "production" else "usuario123"
+        )
+        demo_email = os.environ.get("USER_EMAIL", "usuario@pasarela.local")
+        cursor_user = (
+            conn.execute(
+                "SELECT id FROM usuarios WHERE username = ?", (demo_user,)
+            )
+            if demo_user and demo_pass
+            else None
+        )
+        if cursor_user and not cursor_user.fetchone():
             hashed_demo = generate_password_hash(demo_pass)
             conn.execute(
                 """
@@ -327,32 +374,132 @@ def validar_moneda_divisas(valor, nombre):
     return moneda, None
 
 
-def reenviar_a_reportes(recurso):
-    try:
-        respuesta = requests.get(
-            f"{REPORTES_BASE_URL}/reportes/{recurso}",
-            headers={"Authorization": request.headers.get("Authorization", "")},
-            timeout=5,
+def calcular_reporte_pagos(pagos):
+    por_estado = {"aprobado": 0, "pendiente": 0, "rechazado": 0}
+    por_metodo = {"tarjeta": 0, "transferencia": 0, "efectivo": 0}
+    acumulados_por_moneda = {}
+
+    for pago in pagos:
+        monto = float(pago.get("monto", 0))
+        moneda = str(pago.get("moneda") or "N/A").upper()
+        agregado = acumulados_por_moneda.setdefault(
+            moneda, {"cantidad": 0, "monto": 0.0}
         )
-    except requests.RequestException:
-        return (
-            jsonify(
-                {
-                    "error": (
-                        "El servicio de reportes no está en ejecución. "
-                        "Inicia reportes_api (puerto 5001)."
-                    )
-                }
+        agregado["cantidad"] += 1
+        agregado["monto"] += monto
+        if pago.get("estado") in por_estado:
+            por_estado[pago["estado"]] += 1
+        if pago.get("metodo_pago") in por_metodo:
+            por_metodo[pago["metodo_pago"]] += 1
+
+    por_moneda = {
+        moneda: {
+            "cantidad": agregado["cantidad"],
+            "monto": round(agregado["monto"], 2),
+        }
+        for moneda, agregado in acumulados_por_moneda.items()
+    }
+    if len(por_moneda) == 1:
+        monto_total = next(iter(por_moneda.values()))["monto"]
+        promedio_monto = round(monto_total / len(pagos), 2)
+    elif por_moneda:
+        monto_total = None
+        promedio_monto = None
+    else:
+        monto_total = 0.0
+        promedio_monto = 0.0
+
+    return {
+        "total_transacciones": len(pagos),
+        "monto_total": monto_total,
+        "promedio_monto": promedio_monto,
+        "por_estado": por_estado,
+        "por_metodo": por_metodo,
+        "por_moneda": por_moneda,
+    }
+
+
+def calcular_reporte_facturas(facturas):
+    por_estado = {"emitida": 0, "pagada": 0, "anulada": 0}
+    acumulados_por_moneda = {}
+    totales_por_cliente_y_moneda = {}
+
+    for factura in facturas:
+        estado = factura.get("estado")
+        if estado in por_estado:
+            por_estado[estado] += 1
+        if estado == "anulada":
+            continue
+
+        moneda = str(factura.get("moneda") or "N/A").upper()
+        total = float(factura.get("total", 0))
+        impuesto = float(factura.get("impuesto", 0))
+        agregado = acumulados_por_moneda.setdefault(
+            moneda, {"cantidad": 0, "total_facturado": 0.0, "iva": 0.0}
+        )
+        agregado["cantidad"] += 1
+        agregado["total_facturado"] += total
+        agregado["iva"] += impuesto
+
+        cliente = factura.get("cliente", "Desconocido")
+        clave = (cliente, moneda)
+        totales_por_cliente_y_moneda[clave] = (
+            totales_por_cliente_y_moneda.get(clave, 0.0) + total
+        )
+
+    por_moneda = {
+        moneda: {
+            "cantidad": agregado["cantidad"],
+            "total_facturado": round(agregado["total_facturado"], 2),
+            "iva": round(agregado["iva"], 2),
+        }
+        for moneda, agregado in acumulados_por_moneda.items()
+    }
+    top_clientes = []
+    for moneda in sorted(por_moneda):
+        clientes = sorted(
+            (
+                {"cliente": cliente, "moneda": divisa, "total": round(total, 2)}
+                for (cliente, divisa), total in totales_por_cliente_y_moneda.items()
+                if divisa == moneda
             ),
-            503,
+            key=lambda item: item["total"],
+            reverse=True,
         )
+        top_clientes.extend(clientes[:5])
+
+    if len(por_moneda) == 1:
+        total_facturado = next(iter(por_moneda.values()))["total_facturado"]
+        total_iva = next(iter(por_moneda.values()))["iva"]
+    elif por_moneda:
+        total_facturado = None
+        total_iva = None
+    else:
+        total_facturado = 0.0
+        total_iva = 0.0
+
+    return {
+        "total_facturas": len(facturas),
+        "total_facturado": total_facturado,
+        "total_iva_recaudado": total_iva,
+        "por_moneda": por_moneda,
+        "por_estado": por_estado,
+        "top_clientes": top_clientes,
+    }
+
+
+def obtener_datos_reporte(tabla, campos):
+    conn = get_db()
     try:
-        return jsonify(respuesta.json()), respuesta.status_code
-    except ValueError:
-        return (
-            jsonify({"error": "El servicio de reportes devolvió una respuesta inválida"}),
-            502,
-        )
+        consulta = f"SELECT {campos} FROM {tabla}"
+        valores = []
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " WHERE creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        filas = conn.execute(consulta, valores).fetchall()
+        return [dict(fila) for fila in filas]
+    finally:
+        conn.close()
 
 
 def validar_pago(data):
@@ -386,6 +533,9 @@ def validar_pago(data):
             None,
             "El campo 'moneda' debe ser un código de tres letras, como COP o USD",
         )
+    moneda, error = validar_moneda_divisas(moneda, "moneda")
+    if error:
+        return None, error
 
     metodo_pago = data["metodo_pago"]
     if not isinstance(metodo_pago, str) or metodo_pago not in METODOS_PAGO:
@@ -404,7 +554,7 @@ def validar_pago(data):
     return {
         "cliente": cliente.strip(),
         "monto": monto,
-        "moneda": moneda.upper(),
+        "moneda": moneda,
         "metodo_pago": metodo_pago,
         "estado": estado,
     }, None
@@ -457,31 +607,66 @@ def validar_factura(data):
     pago_id = data.get("pago_id")
     pago_relacionado = None
     if pago_id is not None:
-        if not isinstance(pago_id, int):
-            return None, "El campo 'pago_id' debe ser un número entero"
+        if isinstance(pago_id, bool) or not isinstance(pago_id, int) or pago_id <= 0:
+            return None, "El campo 'pago_id' debe ser un número entero positivo"
         pago_relacionado = obtener_pago(pago_id)
         if not pago_relacionado:
             return None, f"No existe un pago registrado con id {pago_id}"
 
     # Si viene ligado a un pago y no envían cliente o moneda, se toman del pago
     cliente = data.get("cliente")
-    if not cliente and pago_relacionado:
+    if cliente is None and pago_relacionado:
         cliente = pago_relacionado["cliente"]
     if not isinstance(cliente, str) or not cliente.strip():
         return None, "El campo 'cliente' debe ser un texto no vacío"
+    if len(cliente.strip()) > 200:
+        return None, "El campo 'cliente' no puede superar 200 caracteres"
 
     moneda = data.get("moneda")
-    if not moneda and pago_relacionado:
+    if moneda is None and pago_relacionado:
         moneda = pago_relacionado["moneda"]
-    if not isinstance(moneda, str) or not re.fullmatch(r"[A-Za-z]{3}", moneda):
-        return (
-            None,
-            "El campo 'moneda' debe ser un código de tres letras, como COP o USD",
+    moneda, error = validar_moneda_divisas(moneda, "moneda")
+    if error:
+        return None, error
+
+    email_cliente = data.get("email_cliente")
+    if email_cliente is not None:
+        if not isinstance(email_cliente, str) or len(email_cliente) > 254:
+            return None, "El campo 'email_cliente' debe ser un texto de máximo 254 caracteres"
+        email_cliente = email_cliente.strip()
+        if email_cliente and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email_cliente):
+            return None, "El campo 'email_cliente' debe ser un correo válido"
+        email_cliente = email_cliente or None
+
+    documento_cliente = data.get("documento_cliente")
+    if documento_cliente is not None:
+        if (
+            not isinstance(documento_cliente, str)
+            or not documento_cliente.strip()
+            or len(documento_cliente.strip()) > 64
+        ):
+            return None, "El campo 'documento_cliente' debe tener entre 1 y 64 caracteres"
+        documento_cliente = documento_cliente.strip()
+
+    moneda_origen = None
+    tasa_conversion = None
+    fuente_tasa = None
+    fecha_tasa = None
+    if pago_relacionado and moneda != pago_relacionado["moneda"].upper():
+        moneda_origen = pago_relacionado["moneda"].upper()
+        moneda_origen, error = validar_moneda_divisas(
+            moneda_origen, "moneda del pago asociado"
         )
+        if error:
+            return None, error
+        datos_tasa = obtener_tasas_divisas(moneda_origen)
+        tasa_conversion = Decimal(str(datos_tasa["tasas"][moneda]))
+        fuente_tasa = datos_tasa["fuente"]
+        fecha_tasa = datos_tasa["fecha_actualizacion"]
 
     # Validar o autogenerar items
     items_raw = data.get("items")
-    if not items_raw and pago_relacionado:
+    if "items" not in data and pago_relacionado:
         items_raw = [
             {
                 "descripcion": f"Pago #{pago_relacionado['id']} - Método: {pago_relacionado['metodo_pago']}",
@@ -498,7 +683,8 @@ def validar_factura(data):
         )
 
     items_procesados = []
-    subtotal_calculado = 0.0
+    subtotal_calculado = Decimal("0")
+    centavo = Decimal("0.01")
     for idx, item in enumerate(items_raw):
         if not isinstance(item, dict):
             return None, f"El artículo #{idx + 1} debe ser un objeto JSON"
@@ -511,69 +697,124 @@ def validar_factura(data):
             )
 
         cantidad = item.get("cantidad")
-        if isinstance(cantidad, bool) or not isinstance(cantidad, (int, float)) or cantidad <= 0:
+        if isinstance(cantidad, bool) or not isinstance(cantidad, (int, float)):
             return (
                 None,
                 f"La cantidad en el artículo #{idx + 1} debe ser mayor a cero",
             )
 
         precio = item.get("precio_unitario")
-        if isinstance(precio, bool) or not isinstance(precio, (int, float)) or precio <= 0:
+        if isinstance(precio, bool) or not isinstance(precio, (int, float)):
             return (
                 None,
                 f"El precio unitario en el artículo #{idx + 1} debe ser mayor a cero",
             )
 
-        item_subtotal = round(float(cantidad) * float(precio), 2)
+        try:
+            cantidad_decimal = Decimal(str(cantidad))
+            precio_decimal = Decimal(str(precio))
+            if (
+                not cantidad_decimal.is_finite()
+                or not precio_decimal.is_finite()
+                or cantidad_decimal <= 0
+                or precio_decimal <= 0
+            ):
+                raise InvalidOperation
+            if tasa_conversion is not None:
+                precio_decimal *= tasa_conversion
+            precio_decimal = precio_decimal.quantize(
+                centavo, rounding=ROUND_HALF_UP
+            )
+            item_subtotal = (cantidad_decimal * precio_decimal).quantize(
+                centavo, rounding=ROUND_HALF_UP
+            )
+            if not math.isfinite(float(item_subtotal)):
+                raise InvalidOperation
+        except (InvalidOperation, OverflowError, ValueError):
+            return (
+                None,
+                f"La cantidad o el precio del artículo #{idx + 1} no es válido",
+            )
         subtotal_calculado += item_subtotal
         items_procesados.append(
             {
                 "descripcion": descripcion.strip(),
                 "cantidad": cantidad,
-                "precio_unitario": round(float(precio), 2),
-                "subtotal": item_subtotal,
+                "precio_unitario": float(precio_decimal),
+                "subtotal": float(item_subtotal),
             }
         )
 
     # Porcentaje de impuesto (IVA)
     porcentaje_impuesto = data.get("porcentaje_impuesto", 19.0)
-    if (
-        isinstance(porcentaje_impuesto, bool)
-        or not isinstance(porcentaje_impuesto, (int, float))
-        or porcentaje_impuesto < 0
+    if isinstance(porcentaje_impuesto, bool) or not isinstance(
+        porcentaje_impuesto, (int, float)
     ):
         return (
             None,
-            "El campo 'porcentaje_impuesto' debe ser un número mayor o igual a cero",
+            "El campo 'porcentaje_impuesto' debe ser un número entre 0 y 100",
         )
 
-    subtotal = round(subtotal_calculado, 2)
-    impuesto = round(subtotal * (float(porcentaje_impuesto) / 100.0), 2)
-    total = round(subtotal + impuesto, 2)
+    try:
+        porcentaje_decimal = Decimal(str(porcentaje_impuesto))
+        if (
+            not porcentaje_decimal.is_finite()
+            or porcentaje_decimal < 0
+            or porcentaje_decimal > 100
+        ):
+            raise InvalidOperation
+        subtotal_decimal = subtotal_calculado.quantize(
+            centavo, rounding=ROUND_HALF_UP
+        )
+        impuesto_decimal = (subtotal_decimal * porcentaje_decimal / 100).quantize(
+            centavo, rounding=ROUND_HALF_UP
+        )
+        total_decimal = subtotal_decimal + impuesto_decimal
+        if not all(
+            math.isfinite(float(valor))
+            for valor in (subtotal_decimal, impuesto_decimal, total_decimal)
+        ):
+            raise InvalidOperation
+    except (InvalidOperation, OverflowError, ValueError):
+        return None, "Los importes o el impuesto exceden el rango permitido"
 
-    estado = data.get("estado")
-    if not estado:
+    if "estado" not in data:
         if pago_relacionado and pago_relacionado["estado"] == "aprobado":
             estado = "pagada"
         else:
             estado = "emitida"
-    elif estado not in ESTADOS_FACTURA:
+    else:
+        estado = data["estado"]
+    if not isinstance(estado, str) or estado not in ESTADOS_FACTURA:
         return (
             None,
             f"El campo 'estado' debe ser uno de: {', '.join(sorted(ESTADOS_FACTURA))}",
+        )
+    if estado == "pagada" and (
+        not pago_relacionado or pago_relacionado["estado"] != "aprobado"
+    ):
+        return (
+            None,
+            "Una factura solo puede emitirse como 'pagada' si está ligada a un pago aprobado",
         )
 
     return {
         "pago_id": pago_id,
         "cliente": cliente.strip(),
-        "email_cliente": data.get("email_cliente"),
-        "documento_cliente": data.get("documento_cliente"),
+        "email_cliente": email_cliente,
+        "documento_cliente": documento_cliente,
         "items": items_procesados,
-        "subtotal": subtotal,
-        "porcentaje_impuesto": float(porcentaje_impuesto),
-        "impuesto": impuesto,
-        "total": total,
-        "moneda": moneda.upper(),
+        "subtotal": float(subtotal_decimal),
+        "porcentaje_impuesto": float(porcentaje_decimal),
+        "impuesto": float(impuesto_decimal),
+        "total": float(total_decimal),
+        "moneda": moneda,
+        "moneda_origen": moneda_origen,
+        "tasa_conversion": (
+            float(tasa_conversion) if tasa_conversion is not None else None
+        ),
+        "fuente_tasa": fuente_tasa,
+        "fecha_tasa": fecha_tasa,
         "estado": estado,
     }, None
 
@@ -678,20 +919,37 @@ def convertir_divisas():
 
 @app.route("/api/reportes/resumen", methods=["GET"])
 @token_requerido
-def proxy_reporte_resumen():
-    return reenviar_a_reportes("resumen")
+def reporte_resumen():
+    pagos = obtener_datos_reporte(
+        "pagos", "monto, moneda, estado, metodo_pago, creado_por"
+    )
+    facturas = obtener_datos_reporte(
+        "facturas", "cliente, total, impuesto, moneda, estado, creado_por"
+    )
+    return jsonify(
+        {
+            "pagos": calcular_reporte_pagos(pagos),
+            "facturas": calcular_reporte_facturas(facturas),
+        }
+    ), 200
 
 
 @app.route("/api/reportes/pagos", methods=["GET"])
 @token_requerido
-def proxy_reporte_pagos():
-    return reenviar_a_reportes("pagos")
+def reporte_pagos():
+    pagos = obtener_datos_reporte(
+        "pagos", "monto, moneda, estado, metodo_pago, creado_por"
+    )
+    return jsonify(calcular_reporte_pagos(pagos)), 200
 
 
 @app.route("/api/reportes/facturas", methods=["GET"])
 @token_requerido
-def proxy_reporte_facturas():
-    return reenviar_a_reportes("facturas")
+def reporte_facturas():
+    facturas = obtener_datos_reporte(
+        "facturas", "cliente, total, impuesto, moneda, estado, creado_por"
+    )
+    return jsonify(calcular_reporte_facturas(facturas)), 200
 
 
 @app.route("/login", methods=["POST"])
@@ -879,21 +1137,38 @@ def listar_usuarios():
 
 
 @app.route("/pagos", methods=["GET"])
+@token_requerido
 def listar_pagos():
     conn = get_db()
     try:
-        filas = conn.execute("SELECT * FROM pagos ORDER BY id").fetchall()
+        consulta = "SELECT * FROM pagos"
+        valores = []
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " WHERE creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        consulta += " ORDER BY id"
+        filas = conn.execute(consulta, valores).fetchall()
         return jsonify([dict(fila) for fila in filas]), 200
     finally:
         conn.close()
 
 
 @app.route("/pagos/<int:pago_id>", methods=["GET"])
+@token_requerido
 def consultar_pago(pago_id):
-    pago = obtener_pago(pago_id)
-    if pago is None:
-        return jsonify({"error": "No existe un pago con ese id"}), 404
-    return jsonify(pago), 200
+    conn = get_db()
+    try:
+        consulta = "SELECT * FROM pagos WHERE id = ?"
+        valores = [pago_id]
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " AND creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        fila = conn.execute(consulta, valores).fetchone()
+        if fila is None:
+            return jsonify({"error": "No existe un pago con ese id"}), 404
+        return jsonify(dict(fila)), 200
+    finally:
+        conn.close()
 
 
 @app.route("/pagos", methods=["POST"])
@@ -1006,9 +1281,10 @@ def crear_factura():
             INSERT INTO facturas (
                 numero_factura, pago_id, cliente, email_cliente, documento_cliente,
                 items, subtotal, porcentaje_impuesto, impuesto, total,
-                moneda, estado, creado_por
+                moneda, estado, creado_por, moneda_origen, tasa_conversion,
+                fuente_tasa, fecha_tasa
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 numero_factura,
@@ -1024,6 +1300,10 @@ def crear_factura():
                 datos_factura["moneda"],
                 datos_factura["estado"],
                 usuario_creador,
+                datos_factura["moneda_origen"],
+                datos_factura["tasa_conversion"],
+                datos_factura["fuente_tasa"],
+                datos_factura["fecha_tasa"],
             ),
         )
         conn.commit()
@@ -1164,6 +1444,17 @@ def consultar_factura_formato_estandar(factura_id):
             "tasa_impuesto": f"{factura['porcentaje_impuesto']}%",
             "valor_impuesto": factura["impuesto"],
             "total_a_pagar": factura["total"],
+            "conversion_divisa": (
+                {
+                    "moneda_origen": factura["moneda_origen"],
+                    "moneda_destino": factura["moneda"],
+                    "tasa": factura["tasa_conversion"],
+                    "fuente": factura["fuente_tasa"],
+                    "fecha_tasa": factura["fecha_tasa"],
+                }
+                if factura["tasa_conversion"] is not None
+                else None
+            ),
         },
         "metadatos_auditoria": {
             "creado_por": factura["creado_por"],
@@ -1184,7 +1475,7 @@ def cambiar_estado_factura(factura_id):
         return jsonify({"error": "Debe enviar un JSON con el campo 'estado'"}), 400
 
     nuevo_estado = data["estado"]
-    if nuevo_estado not in ESTADOS_FACTURA:
+    if not isinstance(nuevo_estado, str) or nuevo_estado not in ESTADOS_FACTURA:
         return (
             jsonify(
                 {
@@ -1197,12 +1488,30 @@ def cambiar_estado_factura(factura_id):
     conn = get_db()
     try:
         cursor = conn.execute(
-            "UPDATE facturas SET estado = ? WHERE id = ?",
-            (nuevo_estado, factura_id),
+            """
+            UPDATE facturas SET estado = ?
+            WHERE id = ? AND estado = 'emitida' AND ? IN ('pagada', 'anulada')
+            """,
+            (nuevo_estado, factura_id, nuevo_estado),
         )
         conn.commit()
         if cursor.rowcount == 0:
-            return jsonify({"error": "No existe una factura con ese id"}), 404
+            fila_existente = conn.execute(
+                "SELECT estado FROM facturas WHERE id = ?", (factura_id,)
+            ).fetchone()
+            if not fila_existente:
+                return jsonify({"error": "No existe una factura con ese id"}), 404
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Solo se puede cambiar una factura emitida a "
+                            "'pagada' o 'anulada'"
+                        )
+                    }
+                ),
+                409,
+            )
 
         fila = conn.execute(
             "SELECT * FROM facturas WHERE id = ?", (factura_id,)
@@ -1215,21 +1524,47 @@ def cambiar_estado_factura(factura_id):
 @app.route("/facturas/<int:factura_id>", methods=["DELETE"])
 @solo_admin
 def eliminar_factura(factura_id):
-    """Elimina una factura. Exclusivo para administradores."""
+    """Anula una factura emitida sin borrar el registro contable."""
     conn = get_db()
     try:
-        cursor = conn.execute("DELETE FROM facturas WHERE id = ?", (factura_id,))
+        cursor = conn.execute(
+            "UPDATE facturas SET estado = 'anulada' WHERE id = ? AND estado = 'emitida'",
+            (factura_id,),
+        )
         conn.commit()
+        if cursor.rowcount == 0:
+            fila = conn.execute(
+                "SELECT estado FROM facturas WHERE id = ?", (factura_id,)
+            ).fetchone()
+            if not fila:
+                return jsonify({"error": "No existe una factura con ese id"}), 404
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Solo se pueden anular facturas en estado 'emitida'; "
+                            f"el estado actual es '{fila['estado']}'"
+                        )
+                    }
+                ),
+                409,
+            )
+        fila = conn.execute(
+            "SELECT * FROM facturas WHERE id = ?", (factura_id,)
+        ).fetchone()
+        factura = formatear_factura(dict(fila))
     finally:
         conn.close()
 
-    if cursor.rowcount == 0:
-        return jsonify({"error": "No existe una factura con ese id"}), 404
-    return jsonify({"mensaje": "Factura eliminada correctamente"}), 200
+    return jsonify({"mensaje": "Factura anulada; el registro se conservó", "factura": factura}), 200
 
 
 # Inicializar base de datos y esquemas
 init_db()
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False,
+    )

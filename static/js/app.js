@@ -374,8 +374,18 @@ async function recargarTodo() {
 }
 
 async function cargarPagos() {
+  if (!AppState.token) {
+    AppState.pagos = [];
+    renderizarTablaPagos([]);
+    actualizarMetricasPagos([]);
+    actualizarSelectorPagosEnFacturas([]);
+    return;
+  }
+
   try {
-    const res = await fetch('/pagos');
+    const res = await fetch('/pagos', {
+      headers: { 'Authorization': `Bearer ${AppState.token}` }
+    });
     const data = await res.json();
     if (res.ok) {
       AppState.pagos = data;
@@ -428,17 +438,18 @@ function renderizarTablaPagos(pagos) {
 }
 
 function actualizarMetricasPagos(pagos) {
-  let total = 0;
+  const montosPorMoneda = {};
   let aprobados = 0;
   let pendientes = 0;
 
   pagos.forEach(p => {
-    total += parseFloat(p.monto) || 0;
+    const moneda = p.moneda || 'COP';
+    montosPorMoneda[moneda] = (montosPorMoneda[moneda] || 0) + (parseFloat(p.monto) || 0);
     if (p.estado === 'aprobado') aprobados++;
     if (p.estado === 'pendiente') pendientes++;
   });
 
-  document.getElementById('metric-total-monto').innerText = formatearMoneda(total, 'USD');
+  document.getElementById('metric-total-monto').innerText = formatearMontosPorMoneda(montosPorMoneda);
   document.getElementById('metric-total-pagos-count').innerText = `${pagos.length} transacciones registradas`;
   document.getElementById('metric-pagos-aprobados').innerText = aprobados;
   document.getElementById('metric-pagos-pendientes').innerText = pendientes;
@@ -510,9 +521,11 @@ function renderizarTablaFacturas(facturas) {
           <button type="button" class="btn-table-action" onclick="verFacturaFormatoEstandar(${f.id})">
             VER JSON
           </button>
-          <button type="button" class="btn-table-action delete" onclick="eliminarFacturaAccion(${f.id})">
-            ELIMINAR
-          </button>
+          ${AppState.usuarioActual?.rol === 'admin' && f.estado === 'emitida' ? `
+            <button type="button" class="btn-table-action delete" onclick="eliminarFacturaAccion(${f.id})">
+              ANULAR
+            </button>
+          ` : ''}
         </div>
       </td>
     </tr>
@@ -520,21 +533,24 @@ function renderizarTablaFacturas(facturas) {
 }
 
 function actualizarMetricasFacturas(facturas) {
-  let total = 0;
-  let totalIVA = 0;
+  const montosPorMoneda = {};
+  const ivaPorMoneda = {};
   let pagadas = 0;
   let emitidas = 0;
 
   facturas.forEach(f => {
-    total += parseFloat(f.total) || 0;
-    totalIVA += parseFloat(f.impuesto) || 0;
+    if (f.estado !== 'anulada') {
+      const moneda = f.moneda || 'COP';
+      montosPorMoneda[moneda] = (montosPorMoneda[moneda] || 0) + (parseFloat(f.total) || 0);
+      ivaPorMoneda[moneda] = (ivaPorMoneda[moneda] || 0) + (parseFloat(f.impuesto) || 0);
+    }
     if (f.estado === 'pagada') pagadas++;
     if (f.estado === 'emitida') emitidas++;
   });
 
-  document.getElementById('metric-facturado-total').innerText = formatearMoneda(total, 'COP');
-  document.getElementById('metric-facturas-count').innerText = `${facturas.length} emitidas`;
-  document.getElementById('metric-facturado-iva').innerText = formatearMoneda(totalIVA, 'COP');
+  document.getElementById('metric-facturado-total').innerText = formatearMontosPorMoneda(montosPorMoneda);
+  document.getElementById('metric-facturas-count').innerText = `${facturas.length} registradas`;
+  document.getElementById('metric-facturado-iva').innerText = formatearMontosPorMoneda(ivaPorMoneda);
   document.getElementById('metric-facturas-pagadas').innerText = pagadas;
   document.getElementById('metric-facturas-emitidas').innerText = emitidas;
 }
@@ -875,7 +891,7 @@ async function eliminarFacturaAccion(facturaId) {
 
     if (!res.ok) throw new Error(data.error || 'No se pudo eliminar la factura');
 
-    lanzarToast('success', 'FACTURA ELIMINADA', `Factura #${facturaId} eliminada.`);
+    lanzarToast('success', 'FACTURA ANULADA', `Factura #${facturaId} anulada; se conservó el registro.`);
     await recargarTodo();
   } catch (err) {
     lanzarToast('error', 'ERROR', err.message);
@@ -998,11 +1014,6 @@ async function cargarReporteResumen() {
       estado.textContent = 'Tu sesión venció o no es válida. Inicia sesión nuevamente para consultar los reportes.';
       return;
     }
-    if (res.status === 503) {
-      estado.className = 'api-status error';
-      estado.textContent = 'El servicio de reportes no está disponible. Inicia reportes_api en el puerto 5001.';
-      return;
-    }
     if (!res.ok) throw new Error(data.error || 'No se pudieron cargar los reportes.');
 
     const pagos = data.pagos || {};
@@ -1010,14 +1021,23 @@ async function cargarReporteResumen() {
     document.getElementById('reporte-total-transacciones').textContent =
       String(pagos.total_transacciones ?? 0);
     document.getElementById('reporte-monto-total').textContent =
-      formatearNumero(pagos.monto_total);
+      formatearMontosPorMoneda(
+        Object.fromEntries(
+          Object.entries(pagos.por_moneda || {}).map(([moneda, datos]) => [moneda, datos.monto])
+        )
+      );
     document.getElementById('reporte-total-facturas').textContent =
       String(facturas.total_facturas ?? 0);
     document.getElementById('reporte-total-iva').textContent =
-      formatearNumero(facturas.total_iva_recaudado);
+      formatearMontosPorMoneda(
+        Object.fromEntries(
+          Object.entries(facturas.por_moneda || {}).map(([moneda, datos]) => [moneda, datos.iva])
+        )
+      );
     renderizarTablaConteos(pagos.por_estado, 'reporte-por-estado');
     renderizarTablaConteos(pagos.por_metodo, 'reporte-por-metodo');
     renderizarTablaMonedas(pagos.por_moneda);
+    renderizarTablaFacturasMoneda(facturas.por_moneda);
     renderizarTopClientes(facturas.top_clientes);
     estado.textContent = 'Reportes actualizados correctamente.';
   } catch (err) {
@@ -1056,10 +1076,33 @@ function renderizarTopClientes(clientes) {
     ? clientes.map(cliente => `
       <tr>
         <td>${escaparHTML(cliente.cliente)}</td>
-        <td class="text-right">${formatearNumero(cliente.total)}</td>
+        <td class="text-right">${formatearMoneda(cliente.total, cliente.moneda)}</td>
       </tr>
     `).join('')
     : '<tr><td colspan="2">Sin datos</td></tr>';
+}
+
+function renderizarTablaFacturasMoneda(datos) {
+  const tbody = document.getElementById('reporte-facturas-por-moneda');
+  const filas = Object.entries(datos || {});
+  tbody.innerHTML = filas.length
+    ? filas.map(([moneda, resumen]) => `
+      <tr>
+        <td>${escaparHTML(moneda)}</td>
+        <td class="text-right">${formatearMoneda(resumen.total_facturado, moneda)}</td>
+        <td class="text-right">${formatearMoneda(resumen.iva, moneda)}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="3">Sin datos</td></tr>';
+}
+
+function formatearMontosPorMoneda(montos) {
+  const entradas = Object.entries(montos || {}).sort(([monedaA], [monedaB]) =>
+    monedaA.localeCompare(monedaB)
+  );
+  return entradas.length
+    ? entradas.map(([moneda, monto]) => `${moneda}: ${formatearMoneda(monto, moneda)}`).join(' · ')
+    : formatearMoneda(0, 'COP');
 }
 
 function formatearNumero(valor) {

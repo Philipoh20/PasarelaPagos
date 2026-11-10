@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -78,20 +79,94 @@ class PasarelaPagosTest(unittest.TestCase):
             f"/pagos/{primer_id}", headers=self.headers
         )
         self.assertEqual(eliminado.status_code, 200)
-        self.assertEqual(self.cliente.get(f"/pagos/{primer_id}").status_code, 404)
+        self.assertEqual(
+            self.cliente.get(
+                f"/pagos/{primer_id}", headers=self.headers
+            ).status_code,
+            404,
+        )
 
-        listado = self.cliente.get("/pagos")
+        listado = self.cliente.get("/pagos", headers=self.headers)
         self.assertEqual(listado.status_code, 200)
         self.assertEqual([pago["id"] for pago in listado.get_json()], [segundo_id])
 
         main.init_db()
-        persistente = self.cliente.get(f"/pagos/{segundo_id}")
+        persistente = self.cliente.get(
+            f"/pagos/{segundo_id}", headers=self.headers
+        )
         self.assertEqual(persistente.status_code, 200)
         self.assertEqual(persistente.get_json()["cliente"], "Segundo cliente")
+
+    def test_init_db_migra_facturas_existentes_con_datos(self):
+        archivo_legacy = tempfile.NamedTemporaryFile(delete=False)
+        archivo_legacy.close()
+        bd_actual = main.BD_NAME
+        try:
+            conn = sqlite3.connect(archivo_legacy.name)
+            conn.execute(
+                """
+                CREATE TABLE facturas (
+                    id INTEGER PRIMARY KEY,
+                    numero_factura TEXT UNIQUE NOT NULL,
+                    pago_id INTEGER,
+                    cliente TEXT NOT NULL,
+                    email_cliente TEXT,
+                    documento_cliente TEXT,
+                    items TEXT NOT NULL,
+                    subtotal REAL NOT NULL,
+                    porcentaje_impuesto REAL NOT NULL,
+                    impuesto REAL NOT NULL,
+                    total REAL NOT NULL,
+                    moneda TEXT NOT NULL,
+                    estado TEXT NOT NULL,
+                    creado_por TEXT NOT NULL,
+                    fecha_emision TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO facturas (
+                    numero_factura, cliente, items, subtotal,
+                    porcentaje_impuesto, impuesto, total, moneda, estado, creado_por
+                ) VALUES ('FAC-LEGACY', 'Cliente', '[]', 10, 0, 0, 10, 'COP', 'emitida', 'admin')
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            main.BD_NAME = archivo_legacy.name
+            main.init_db()
+            migrated = main.get_db()
+            columns = {
+                row["name"] for row in migrated.execute("PRAGMA table_info(facturas)")
+            }
+            factura = migrated.execute(
+                "SELECT numero_factura, total FROM facturas WHERE numero_factura = ?",
+                ("FAC-LEGACY",),
+            ).fetchone()
+            migrated.close()
+
+            self.assertTrue(
+                {
+                    "moneda_origen",
+                    "tasa_conversion",
+                    "fuente_tasa",
+                    "fecha_tasa",
+                }.issubset(columns)
+            )
+            self.assertEqual(factura["total"], 10)
+        finally:
+            main.BD_NAME = bd_actual
+            os.unlink(archivo_legacy.name)
 
     def test_escrituras_requieren_token(self):
         respuesta = self.cliente.post("/pagos", json=PAGO_INICIAL)
         self.assertEqual(respuesta.status_code, 401)
+
+    def test_consultas_pagos_requieren_token(self):
+        self.assertEqual(self.cliente.get("/pagos").status_code, 401)
+        self.assertEqual(self.cliente.get("/pagos/1").status_code, 401)
 
     def test_escrituras_rechazan_token_invalido(self):
         respuesta = self.cliente.post(
@@ -109,6 +184,15 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertEqual(respuesta.status_code, 400)
         self.assertIn("monto", respuesta.get_json()["error"])
 
+    def test_pago_rechaza_moneda_no_configurada(self):
+        pago_invalido = dict(PAGO_INICIAL, moneda="XYZ")
+        respuesta = self.cliente.post(
+            "/pagos", json=pago_invalido, headers=self.headers
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("no está disponible", respuesta.get_json()["error"])
+
     def test_monto_demasiado_grande_devuelve_400(self):
         pago_invalido = dict(PAGO_INICIAL, monto=10**1000)
         respuesta = self.cliente.post(
@@ -117,7 +201,7 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertEqual(respuesta.status_code, 400)
 
     def test_pago_inexistente_devuelve_404(self):
-        respuesta = self.cliente.get("/pagos/999999")
+        respuesta = self.cliente.get("/pagos/999999", headers=self.headers)
         self.assertEqual(respuesta.status_code, 404)
 
     def test_login_invalido_devuelve_401(self):
@@ -134,6 +218,42 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertEqual(datos["version"], "2.1.0")
         self.assertIn("divisas", datos["modulos"])
         self.assertIn("reportes", datos["modulos"])
+
+    def test_reporte_facturas_separa_monedas_y_excluye_anuladas(self):
+        resumen = main.calcular_reporte_facturas(
+            [
+                {
+                    "cliente": "Cliente COP",
+                    "moneda": "COP",
+                    "total": 119,
+                    "impuesto": 19,
+                    "estado": "pagada",
+                },
+                {
+                    "cliente": "Cliente USD",
+                    "moneda": "USD",
+                    "total": 12,
+                    "impuesto": 2,
+                    "estado": "emitida",
+                },
+                {
+                    "cliente": "Factura anulada",
+                    "moneda": "COP",
+                    "total": 500,
+                    "impuesto": 80,
+                    "estado": "anulada",
+                },
+            ]
+        )
+
+        self.assertEqual(resumen["total_facturas"], 3)
+        self.assertIsNone(resumen["total_facturado"])
+        self.assertIsNone(resumen["total_iva_recaudado"])
+        self.assertEqual(resumen["por_moneda"]["COP"]["total_facturado"], 119)
+        self.assertEqual(resumen["por_moneda"]["COP"]["iva"], 19)
+        self.assertEqual(resumen["por_moneda"]["USD"]["total_facturado"], 12)
+        self.assertEqual(resumen["por_estado"]["anulada"], 1)
+        self.assertNotIn("Factura anulada", [row["cliente"] for row in resumen["top_clientes"]])
 
     def test_login_no_usa_credenciales_en_texto_plano(self):
         conn = main.get_db()
@@ -207,39 +327,80 @@ class PasarelaPagosTest(unittest.TestCase):
         )
         self.assertEqual(respuesta.status_code, 400)
 
+    def test_jwt_alterado_y_vencido_se_rechazan(self):
+        partes_token = self.token.split(".")
+        firma = partes_token[2]
+        partes_token[2] = ("a" if firma[0] != "a" else "b") + firma[1:]
+        token_alterado = ".".join(partes_token)
+        respuesta_alterada = self.cliente.get(
+            "/divisas/tasas?base=USD",
+            headers={"Authorization": f"Bearer {token_alterado}"},
+        )
+        self.assertEqual(respuesta_alterada.status_code, 401)
+
+        token_vencido = main.jwt.encode(
+            {
+                "user": "admin",
+                "rol": "admin",
+                "exp": main.datetime.datetime.now(main.datetime.timezone.utc)
+                - main.datetime.timedelta(seconds=1),
+            },
+            main.app.config["SECRET_KEY"],
+            algorithm="HS256",
+        )
+        respuesta_vencida = self.cliente.get(
+            "/divisas/tasas?base=USD",
+            headers={"Authorization": f"Bearer {token_vencido}"},
+        )
+        self.assertEqual(respuesta_vencida.status_code, 401)
+
     @patch("main.requests.get")
-    def test_proxy_reportes_reenvia_token_y_respuesta(self, mock_get):
-        respuesta_microservicio = Mock()
-        respuesta_microservicio.status_code = 200
-        respuesta_microservicio.json.return_value = {"pagos": {"total_transacciones": 3}}
-        mock_get.return_value = respuesta_microservicio
+    def test_reportes_se_calculan_localmente_sin_microservicio(self, mock_get):
+        self.cliente.post("/pagos", json=PAGO_INICIAL, headers=self.headers)
+        factura = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Cliente de reportes",
+                "moneda": "COP",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 100}
+                ],
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(factura.status_code, 201)
 
         respuesta = self.cliente.get(
             "/api/reportes/resumen", headers=self.headers
         )
 
         self.assertEqual(respuesta.status_code, 200)
-        self.assertEqual(respuesta.get_json()["pagos"]["total_transacciones"], 3)
-        mock_get.assert_called_once_with(
-            "http://127.0.0.1:5001/reportes/resumen",
-            headers=self.headers,
-            timeout=5,
+        datos = respuesta.get_json()
+        self.assertEqual(datos["pagos"]["total_transacciones"], 1)
+        self.assertEqual(
+            datos["pagos"]["por_moneda"]["COP"]["monto"], PAGO_INICIAL["monto"]
         )
-
-    @patch(
-        "main.requests.get",
-        side_effect=main.requests.ConnectionError("servicio caído"),
-    )
-    def test_proxy_reportes_devuelve_503_si_servicio_no_responde(self, mock_get):
-        respuesta = self.cliente.get(
+        self.assertEqual(datos["facturas"]["total_facturas"], 1)
+        self.assertEqual(
+            datos["facturas"]["por_moneda"]["COP"]["total_facturado"], 119
+        )
+        respuesta_pagos = self.cliente.get(
             "/api/reportes/pagos", headers=self.headers
         )
+        respuesta_facturas = self.cliente.get(
+            "/api/reportes/facturas", headers=self.headers
+        )
+        self.assertEqual(respuesta_pagos.status_code, 200)
+        self.assertEqual(respuesta_facturas.status_code, 200)
+        self.assertEqual(
+            respuesta_pagos.get_json()["total_transacciones"], 1
+        )
+        self.assertEqual(
+            respuesta_facturas.get_json()["total_facturas"], 1
+        )
+        mock_get.assert_not_called()
 
-        self.assertEqual(respuesta.status_code, 503)
-        self.assertIn("reportes_api", respuesta.get_json()["error"])
-        mock_get.assert_called_once()
-
-    def test_proxy_reportes_requiere_token(self):
+    def test_reportes_requieren_token(self):
         respuesta = self.cliente.get("/api/reportes/resumen")
         self.assertEqual(respuesta.status_code, 401)
 
@@ -258,11 +419,31 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertEqual(resp_me.get_json()["rol"], "usuario")
 
         # Un usuario regular PUEDE crear pagos
+        pago_admin = self.cliente.post(
+            "/pagos", json=PAGO_INICIAL, headers=self.headers
+        ).get_json()
         pago_creado = self.cliente.post(
             "/pagos", json=PAGO_INICIAL, headers=headers_usuario
         )
         self.assertEqual(pago_creado.status_code, 201)
         pago_id = pago_creado.get_json()["id"]
+        pagos_usuario = self.cliente.get("/pagos", headers=headers_usuario)
+        self.assertEqual(
+            [pago["id"] for pago in pagos_usuario.get_json()], [pago_id]
+        )
+        self.assertEqual(
+            self.cliente.get(
+                f"/pagos/{pago_admin['id']}", headers=headers_usuario
+            ).status_code,
+            404,
+        )
+        reporte_usuario = self.cliente.get(
+            "/api/reportes/pagos", headers=headers_usuario
+        )
+        self.assertEqual(reporte_usuario.status_code, 200)
+        self.assertEqual(
+            reporte_usuario.get_json()["total_transacciones"], 1
+        )
 
         # Un usuario regular NO puede modificar pagos (403 Forbidden)
         pago_mod = dict(PAGO_INICIAL, estado="aprobado")
@@ -374,6 +555,84 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertIn("resumen_impuestos_y_totales", doc_json)
         self.assertIn("hash_integridad_sha256", doc_json["metadatos_auditoria"])
 
+    @patch("main.requests.get")
+    def test_factura_convierte_pago_y_guarda_procedencia_de_tasa(self, mock_get):
+        pago = self.cliente.post(
+            "/pagos", json=PAGO_INICIAL, headers=self.headers
+        ).get_json()
+        respuesta_proveedor = Mock()
+        respuesta_proveedor.raise_for_status.return_value = None
+        respuesta_proveedor.json.return_value = {
+            "result": "success",
+            "base_code": "COP",
+            "time_last_update_utc": "Tue, 27 Oct 2026 00:00:01 +0000",
+            "rates": {
+                "USD": 0.0002381,
+                "COP": 1.0,
+                "EUR": 0.0002143,
+                "MXN": 0.004286,
+                "GBP": 0.0001905,
+                "BRL": 0.001238,
+            },
+        }
+        mock_get.return_value = respuesta_proveedor
+
+        respuesta = self.cliente.post(
+            "/facturas",
+            json={"pago_id": pago["id"], "moneda": "USD"},
+            headers=self.headers,
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        factura = respuesta.get_json()
+        self.assertEqual(factura["moneda_origen"], "COP")
+        self.assertEqual(factura["moneda"], "USD")
+        self.assertEqual(factura["tasa_conversion"], 0.0002381)
+        self.assertEqual(factura["fuente_tasa"], "open.er-api.com")
+        self.assertEqual(factura["fecha_tasa"], "Tue, 27 Oct 2026 00:00:01 +0000")
+        self.assertEqual(factura["subtotal"], 0.03)
+
+        documento = self.cliente.get(
+            f"/facturas/{factura['id']}/json", headers=self.headers
+        ).get_json()
+        conversion = documento["resumen_impuestos_y_totales"]["conversion_divisa"]
+        self.assertEqual(conversion["moneda_origen"], "COP")
+        self.assertEqual(conversion["moneda_destino"], "USD")
+        self.assertEqual(conversion["tasa"], 0.0002381)
+
+    def test_factura_rechaza_moneda_no_configurada(self):
+        respuesta = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Cliente",
+                "moneda": "XYZ",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 10}
+                ],
+            },
+            headers=self.headers,
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("no está disponible", respuesta.get_json()["error"])
+
+    def test_factura_no_se_puede_marcar_pagada_sin_pago_aprobado(self):
+        respuesta = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Cliente",
+                "moneda": "COP",
+                "estado": "pagada",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 10}
+                ],
+            },
+            headers=self.headers,
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("pago aprobado", respuesta.get_json()["error"])
+
     def test_facturacion_ligada_a_pago_y_ciclo_vida(self):
         # 1. Crear un pago
         pago_resp = self.cliente.post(
@@ -417,16 +676,39 @@ class PasarelaPagosTest(unittest.TestCase):
         )
         self.assertEqual(resp_del_user.status_code, 403)
 
-        # 5. El admin SÍ puede eliminar la factura
+        # 5. Una factura pagada no se borra ni se anula físicamente.
         resp_del_admin = self.cliente.delete(
             f"/facturas/{factura_id}", headers=self.headers
         )
-        self.assertEqual(resp_del_admin.status_code, 200)
+        self.assertEqual(resp_del_admin.status_code, 409)
+
+        # Las facturas emitidas se anulan conservando el documento y su historial.
+        otra_factura = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Factura emitida para anular",
+                "moneda": "COP",
+                "items": [
+                    {"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 10}
+                ],
+            },
+            headers=self.headers,
+        ).get_json()
+        respuesta_anulacion = self.cliente.delete(
+            f"/facturas/{otra_factura['id']}", headers=self.headers
+        )
+        self.assertEqual(respuesta_anulacion.status_code, 200)
+        self.assertEqual(respuesta_anulacion.get_json()["factura"]["estado"], "anulada")
+        factura_conservada = self.cliente.get(
+            f"/facturas/{otra_factura['id']}", headers=self.headers
+        )
+        self.assertEqual(factura_conservada.status_code, 200)
+        self.assertEqual(factura_conservada.get_json()["estado"], "anulada")
         self.assertEqual(
-            self.cliente.get(
-                f"/facturas/{factura_id}", headers=self.headers
+            self.cliente.delete(
+                f"/facturas/{otra_factura['id']}", headers=self.headers
             ).status_code,
-            404,
+            409,
         )
 
     def test_usuario_solo_consulta_facturas_propias(self):
