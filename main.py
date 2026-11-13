@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import jwt
 import requests
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException, MethodNotAllowed
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -31,10 +32,11 @@ APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "").strip()
 if APP_ENV == "production" and (
     len(JWT_SECRET_KEY) < 32
-    or JWT_SECRET_KEY == "cambia_esta_clave_por_una_secreta_y_segura_en_produccion"
+    # Rechaza los valores de ejemplo de .env.example para obligar a usar uno propio
+    or JWT_SECRET_KEY.startswith("cambia_esta_clave")
 ):
     raise RuntimeError(
-        "En producción, JWT_SECRET_KEY debe configurarse con al menos 32 caracteres"
+        "En producción, JWT_SECRET_KEY debe tener al menos 32 caracteres y no ser el valor de ejemplo"
     )
 METODOS_PAGO = {"tarjeta", "transferencia", "efectivo"}
 ESTADOS_PAGO = {"pendiente", "aprobado", "rechazado"}
@@ -60,6 +62,59 @@ app.config["SECRET_KEY"] = (
 app.config["JWT_EXPIRATION_HOURS"] = int(
     os.environ.get("JWT_EXPIRATION_HOURS", 2)
 )
+
+# NU04: orígenes externos autorizados para consumir la API desde el navegador.
+# La interfaz propia se sirve desde el mismo Flask (mismo origen) y no necesita CORS;
+# esta lista solo aplica si otro frontend en un dominio distinto consume la API.
+CORS_ORIGINS = {
+    origen.strip().rstrip("/")
+    for origen in os.environ.get("CORS_ORIGINS", "").split(",")
+    if origen.strip()
+}
+
+
+@app.after_request
+def aplicar_cors(respuesta):
+    origen = request.headers.get("Origin", "").rstrip("/")
+    if origen and origen in CORS_ORIGINS:
+        respuesta.headers["Access-Control-Allow-Origin"] = origen
+        respuesta.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        respuesta.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        )
+        respuesta.headers["Access-Control-Max-Age"] = "600"
+        respuesta.headers.add("Vary", "Origin")
+    return respuesta
+
+
+MENSAJES_ERROR_HTTP = {
+    400: "Petición inválida",
+    404: "La ruta solicitada no existe",
+    405: "Método HTTP no permitido para esta ruta",
+    413: "El cuerpo de la petición es demasiado grande",
+    415: "Tipo de contenido no soportado; envía JSON",
+}
+
+
+@app.errorhandler(HTTPException)
+def manejar_error_http(error):
+    """RF06: los errores de rutas y métodos también responden en JSON."""
+    respuesta = jsonify(
+        {"error": MENSAJES_ERROR_HTTP.get(error.code, error.name), "codigo": error.code}
+    )
+    respuesta.status_code = error.code
+    if isinstance(error, MethodNotAllowed) and error.valid_methods:
+        respuesta.headers["Allow"] = ", ".join(error.valid_methods)
+    return respuesta
+
+
+@app.errorhandler(Exception)
+def manejar_error_inesperado(error):
+    """Evita devolver trazas o HTML si ocurre un error no controlado."""
+    if isinstance(error, HTTPException):
+        return manejar_error_http(error)
+    app.logger.exception("Error no controlado: %s", error)
+    return jsonify({"error": "Error interno del servidor", "codigo": 500}), 500
 
 
 def get_db():
