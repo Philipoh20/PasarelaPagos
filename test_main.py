@@ -838,6 +838,83 @@ class PasarelaPagosTest(unittest.TestCase):
         self.assertEqual(elim.status_code, 200)
         self.assertEqual(self.cliente.get(f"/usuarios/{u_id}", headers=self.headers).status_code, 404)
 
+    def test_filtrar_facturas_y_lista_vacia(self):
+        # P04: filtros por cliente y estado sobre datos reales, y lista vacía
+        item = [{"descripcion": "Servicio", "cantidad": 1, "precio_unitario": 1000}]
+        for cliente in ("Ferretería Norte", "Ferretería Sur", "Panadería Centro"):
+            respuesta = self.cliente.post(
+                "/facturas",
+                json={"cliente": cliente, "moneda": "COP", "items": item},
+                headers=self.headers,
+            )
+            self.assertEqual(respuesta.status_code, 201)
+        id_sur = next(
+            f["id"]
+            for f in self.cliente.get("/facturas", headers=self.headers).get_json()
+            if f["cliente"] == "Ferretería Sur"
+        )
+        self.cliente.delete(f"/facturas/{id_sur}", headers=self.headers)
+
+        por_cliente = self.cliente.get(
+            "/facturas", query_string={"cliente": "ferretería"}, headers=self.headers
+        )
+        self.assertEqual(por_cliente.status_code, 200)
+        self.assertEqual(
+            sorted(f["cliente"] for f in por_cliente.get_json()),
+            ["Ferretería Norte", "Ferretería Sur"],
+        )
+
+        combinado = self.cliente.get(
+            "/facturas",
+            query_string={"cliente": "Ferretería", "estado": "anulada"},
+            headers=self.headers,
+        ).get_json()
+        self.assertEqual([f["cliente"] for f in combinado], ["Ferretería Sur"])
+
+        vacio = self.cliente.get(
+            "/facturas", query_string={"cliente": "NoExiste"}, headers=self.headers
+        )
+        self.assertEqual(vacio.status_code, 200)
+        self.assertEqual(vacio.get_json(), [])
+
+    def test_errores_http_responden_json(self):
+        # RF06: ruta inexistente y método no permitido devuelven JSON, no HTML
+        no_existe = self.cliente.get("/ruta-que-no-existe", headers=self.headers)
+        self.assertEqual(no_existe.status_code, 404)
+        self.assertEqual(no_existe.get_json()["codigo"], 404)
+        self.assertIn("error", no_existe.get_json())
+
+        metodo = self.cliente.patch("/pagos", headers=self.headers)
+        self.assertEqual(metodo.status_code, 405)
+        self.assertIn("error", metodo.get_json())
+        self.assertIn("GET", metodo.headers["Allow"])
+
+    def test_cors_solo_para_origenes_configurados(self):
+        # NU04: un origen autorizado recibe cabeceras CORS; uno desconocido no
+        with patch.object(main, "CORS_ORIGINS", {"https://front.ejemplo.com"}):
+            permitido = self.cliente.open(
+                "/pagos",
+                method="OPTIONS",
+                headers={
+                    "Origin": "https://front.ejemplo.com",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "Authorization, Content-Type",
+                },
+            )
+            self.assertEqual(permitido.status_code, 200)
+            self.assertEqual(
+                permitido.headers["Access-Control-Allow-Origin"],
+                "https://front.ejemplo.com",
+            )
+            self.assertIn("Authorization", permitido.headers["Access-Control-Allow-Headers"])
+
+            ajeno = self.cliente.get(
+                "/pagos",
+                headers={"Origin": "https://sitio-ajeno.com", **self.headers},
+            )
+            self.assertEqual(ajeno.status_code, 200)
+            self.assertNotIn("Access-Control-Allow-Origin", ajeno.headers)
+
 
 if __name__ == "__main__":
     unittest.main()
