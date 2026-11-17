@@ -216,7 +216,9 @@ def init_db():
                     )
                 if APP_ENV == "production" and (
                     len(admin_pass) < 12
-                    or admin_pass == "cambiar_password_admin"
+                    or admin_pass.lower().startswith("cambia_")
+                    or admin_pass
+                    == "contrasena_segura_para_el_administrador_2026"
                 ):
                     raise RuntimeError(
                         "ADMIN_PASSWORD debe tener al menos 12 caracteres en producción"

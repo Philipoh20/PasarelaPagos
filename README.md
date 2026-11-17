@@ -238,7 +238,7 @@ python -m unittest test_main.py
 ## 🗃️ Carga de datos
 
 - Al iniciar, `init_db()` crea las tablas y aplica las migraciones pendientes. No hace falta ejecutar scripts SQL.
-- El primer administrador se crea a partir de `ADMIN_USERNAME` y `ADMIN_PASSWORD` del `.env`. En desarrollo, si no existen, se usan `admin/admin123` y `usuario/usuario123`; en producción no se crean usuarios de demostración.
+- Al arrancar, `init_db()` crea las tablas y, si aún no existe un administrador, lo siembra con `ADMIN_USERNAME`, `ADMIN_PASSWORD` y `ADMIN_EMAIL` del entorno. En producción, define credenciales propias; la contraseña debe tener al menos 12 caracteres y no puede ser el texto de ejemplo. La contraseña se guarda como hash. En desarrollo, si no existen estas variables, se usan `admin/admin123` y `usuario/usuario123`; en producción no se crean usuarios de demostración.
 - Para tener datos de ejemplo en local: `python demo_prueba.py` (usa la base configurada en `BD_NAME`; ejecútalo solo en local).
 - Para cargar datos en cualquier entorno, incluido el publicado: ejecuta la colección Postman (ver abajo); crea pagos, facturas y usuarios reales a través de la API.
 
@@ -273,10 +273,11 @@ La aplicación se publica en **PythonAnywhere** (plan gratuito). Se eligió porq
    JWT_SECRET_KEY=<el valor generado arriba>
    ADMIN_USERNAME=<usuario administrador>
    ADMIN_PASSWORD=<contraseña de 12 caracteres o más>
+   ADMIN_EMAIL=<correo administrador>
    BD_NAME=/home/TU_USUARIO/PasarelaPagos/main.db
    CORS_ORIGINS=
    ```
-   Con `APP_ENV=production`, la aplicación se niega a arrancar si el secreto JWT es corto o es el valor de ejemplo.
+   No dejes los valores de ejemplo del `.env.example`: la aplicación se niega a arrancar con el secreto JWT de ejemplo o con la contraseña del administrador de ejemplo. En el primer arranque, `init_db()` crea el administrador automáticamente si la base no tiene uno. Si ya hay un administrador, el seed no cambia su contraseña.
 5. **Crear la aplicación web**: pestaña *Web* → *Add a new web app* → *Next* → **Manual configuration** (no "Flask") → la misma versión de Python del paso 3.
 6. En la pestaña *Web*, sección **Virtualenv**, escribe: `/home/TU_USUARIO/.virtualenvs/pasarela`
 7. En la sección **Code**, abre el *WSGI configuration file* (`/var/www/TU_USUARIO_pythonanywhere_com_wsgi.py`), borra todo su contenido y deja:

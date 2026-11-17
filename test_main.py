@@ -50,6 +50,55 @@ class PasarelaPagosTest(unittest.TestCase):
         main.BD_NAME = self.bd_original
         os.unlink(self.archivo_temporal.name)
 
+    def test_seed_admin_produccion_usa_credenciales_configuradas(self):
+        main.BD_NAME = self.archivo_temporal.name
+        conn = sqlite3.connect(main.BD_NAME)
+        conn.execute("DELETE FROM usuarios")
+        conn.commit()
+        conn.close()
+        credenciales = {
+            "ADMIN_USERNAME": "admin_despliegue",
+            "ADMIN_PASSWORD": "UnaClaveUnicaDeProduccion2026!",
+            "ADMIN_EMAIL": "admin@example.com",
+        }
+        with patch.object(main, "APP_ENV", "production"), patch.dict(
+            os.environ, credenciales, clear=True
+        ):
+            main.init_db()
+            main.init_db()
+
+        conn = sqlite3.connect(main.BD_NAME)
+        try:
+            admin = conn.execute(
+                "SELECT username, password, rol, email FROM usuarios "
+                "WHERE username = ?",
+                ("admin_despliegue",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(admin)
+        self.assertEqual(admin[0], "admin_despliegue")
+        self.assertNotEqual(admin[1], credenciales["ADMIN_PASSWORD"])
+        self.assertEqual(admin[2], "admin")
+        self.assertEqual(admin[3], "admin@example.com")
+
+    def test_seed_admin_produccion_rechaza_contrasena_de_ejemplo(self):
+        conn = sqlite3.connect(main.BD_NAME)
+        conn.execute("DELETE FROM usuarios")
+        conn.commit()
+        conn.close()
+        credenciales = {
+            "ADMIN_USERNAME": "admin_despliegue",
+            "ADMIN_PASSWORD": "CAMBIA_ESTA_CONTRASENA_UNICA_ANTES_DE_DESPLEGAR",
+            "ADMIN_EMAIL": "admin@example.com",
+        }
+        with patch.object(main, "APP_ENV", "production"), patch.dict(
+            os.environ, credenciales, clear=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ADMIN_PASSWORD"):
+                main.init_db()
+
     def test_ciclo_crud_y_persistencia_dos_pagos(self):
         primer_pago = dict(PAGO_INICIAL)
         segundo_pago = dict(PAGO_INICIAL, cliente="Segundo cliente", monto=80)
