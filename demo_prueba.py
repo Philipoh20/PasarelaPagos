@@ -162,9 +162,18 @@ imprimir_json(resp_doc_elec.get_json())
 
 
 # ------------------------------------------------------------------------------
-# 8. Reglas de anulación: una factura pagada no se anula; una emitida sí
+# 8. Emisión de Factura en Formato PDF Profesional para Cliente Final
 # ------------------------------------------------------------------------------
-imprimir_paso(8, "ADMIN: REGLAS DE ANULACIÓN DE FACTURAS")
+imprimir_paso(8, f"EMISIÓN DE FACTURA EN FORMATO PDF PROFESIONAL (/facturas/{factura_id}/pdf)")
+resp_pdf = cliente.get(f"/facturas/{factura_id}/pdf", headers=headers_user)
+verificar(resp_pdf, 200, "Factura emitida en PDF")
+print(f">> PDF generado con éxito ({len(resp_pdf.data)} bytes) con diseño ejecutivo y datos claros para el cliente.")
+
+
+# ------------------------------------------------------------------------------
+# 9. Reglas de anulación: una factura pagada no se anula; una emitida sí
+# ------------------------------------------------------------------------------
+imprimir_paso(9, "ADMIN: REGLAS DE ANULACIÓN DE FACTURAS")
 resp_anular_pagada = cliente.delete(f"/facturas/{factura_id}", headers=headers_admin)
 verificar(resp_anular_pagada, 409, "Factura PAGADA no se puede anular")
 imprimir_json(resp_anular_pagada.get_json())

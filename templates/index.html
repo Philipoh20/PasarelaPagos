@@ -341,13 +341,13 @@
           <div class="hero-flex">
             <div>
               <div class="hero-label">03 / FACTURACIÓN ELECTRÓNICA</div>
-              <h1 class="hero-title">FACTURAS EN FORMATO JSON</h1>
+              <h1 class="hero-title">FACTURACIÓN Y COMPROBANTES PDF</h1>
               <p class="hero-subtitle">
-                Emisión de comprobantes electrónicos con cálculo de impuestos y firma de integridad SHA-256.
+                Emisión de comprobantes oficiales en PDF con formato profesional, cálculo de impuestos y trazabilidad.
               </p>
             </div>
             <button type="button" class="btn-solid" id="btn-abrir-modal-factura">
-              + EMITIR FACTURA JSON
+              + EMITIR FACTURA
             </button>
           </div>
         </div>
@@ -692,22 +692,33 @@
     </div>
   </div>
 
-  <!-- MODAL: VISOR DE FACTURA ELECTRÓNICA JSON -->
+  <!-- MODAL: VISOR DE FACTURA ELECTRÓNICA (PDF & VISTA PROFESIONAL) -->
   <div class="editorial-modal-backdrop" id="modal-visor-json" role="dialog" aria-modal="true" aria-labelledby="visor-numero-factura">
-    <div class="editorial-modal modal-wide">
+    <div class="editorial-modal modal-wide invoice-viewer-modal">
       <div class="modal-top">
         <div>
           <h2 class="modal-h3" id="visor-numero-factura">FACTURA #FAC-2026-0001</h2>
-          <span class="modal-meta" id="visor-tipo-doc">FORMATO ELECTRÓNICO OFICIAL JSON // SHA-256 VERIFICADO</span>
+          <span class="modal-meta" id="visor-tipo-doc">COMPROBANTE OFICIAL DE VENTA · FORMATO PDF</span>
         </div>
         <div class="modal-actions-right">
-          <button type="button" class="btn-outline btn-xs" id="btn-copiar-visor">COPIAR JSON</button>
-          <button type="button" class="btn-solid btn-xs" id="btn-descargar-json">DESCARGAR .JSON</button>
+          <button type="button" class="btn-solid btn-xs" id="btn-descargar-pdf">⬇ DESCARGAR PDF</button>
+          <button type="button" class="btn-outline btn-xs" id="btn-imprimir-pdf">🖨️ IMPRIMIR</button>
+          <button type="button" class="btn-outline btn-xs" id="btn-toggle-json" title="Alternar entre vista ejecutiva y datos técnicos">VER JSON</button>
+          <button type="button" class="btn-outline btn-xs hidden" id="btn-copiar-visor">COPIAR JSON</button>
+          <button type="button" class="btn-solid btn-xs hidden" id="btn-descargar-json">DESCARGAR .JSON</button>
           <button type="button" class="modal-close" data-close="modal-visor-json" aria-label="Cerrar modal">&times;</button>
         </div>
       </div>
-      <div class="modal-content p-0">
-        <pre class="json-code-viewer"><code id="visor-json-content"></code></pre>
+      <div class="modal-content p-0" id="visor-modal-body">
+        <!-- VISTA PROFESIONAL DE LA FACTURA PARA CLIENTE DEL COMÚN -->
+        <div id="visor-vista-factura" class="invoice-sheet-container">
+          <!-- Se renderiza dinámicamente -->
+        </div>
+
+        <!-- VISTA TÉCNICA JSON (SECUNDARIA) -->
+        <div id="visor-vista-json" class="hidden">
+          <pre class="json-code-viewer"><code id="visor-json-content"></code></pre>
+        </div>
       </div>
     </div>
   </div>

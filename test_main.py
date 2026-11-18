@@ -964,6 +964,42 @@ class PasarelaPagosTest(unittest.TestCase):
             self.assertEqual(ajeno.status_code, 200)
             self.assertNotIn("Access-Control-Allow-Origin", ajeno.headers)
 
+    def test_emision_factura_pdf(self):
+        # Crear factura de prueba
+        res = self.cliente.post(
+            "/facturas",
+            json={
+                "cliente": "Cliente PDF Prueba",
+                "email_cliente": "cliente@pdf.com",
+                "documento_cliente": "900.111.222-3",
+                "moneda": "COP",
+                "items": [
+                    {"descripcion": "Servicio de Consultoría Cloud", "cantidad": 1, "precio_unitario": 500000.0}
+                ],
+                "porcentaje_impuesto": 19.0,
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(res.status_code, 201)
+        factura_id = res.get_json()["id"]
+
+        # Descarga vía cabecera Authorization
+        res_pdf = self.cliente.get(f"/facturas/{factura_id}/pdf", headers=self.headers)
+        self.assertEqual(res_pdf.status_code, 200)
+        self.assertEqual(res_pdf.mimetype, "application/pdf")
+        self.assertTrue(res_pdf.data.startswith(b"%PDF"))
+
+        # Descarga vía query param ?token=
+        token = self.token
+        res_pdf_token = self.cliente.get(f"/facturas/{factura_id}/pdf?token={token}")
+        self.assertEqual(res_pdf_token.status_code, 200)
+        self.assertEqual(res_pdf_token.mimetype, "application/pdf")
+        self.assertTrue(res_pdf_token.data.startswith(b"%PDF"))
+
+        # Acceso sin token responde 401
+        res_anon = self.cliente.get(f"/facturas/{factura_id}/pdf")
+        self.assertEqual(res_anon.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

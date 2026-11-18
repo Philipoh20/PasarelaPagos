@@ -92,6 +92,7 @@ Además, el endpoint `GET /facturas/<id>/json` genera el documento normalizado d
 | **GET** | `/facturas` | JWT | `usuario` / `admin` | Listar facturas propias (usuarios) o todas (admin); filtros: `cliente`, `estado`, `pago_id` |
 | **GET** | `/facturas/<id>` | JWT | `usuario` / `admin` | Consultar detalle propio; una factura ajena responde `404` |
 | **GET** | `/facturas/<id>/json` | JWT | `usuario` / `admin` | Obtener JSON estándar solo de facturas propias (admin ve todas) |
+| **GET** | `/facturas/<id>/pdf` | JWT | `usuario` / `admin` | Descargar/emitir factura oficial en formato PDF corporativo para cliente final |
 | **PATCH** | `/facturas/<id>/estado` | JWT | `admin` | Cambiar de `emitida` a `pagada` o `anulada` |
 | **DELETE** | `/facturas/<id>` | JWT | `admin` | Anular una factura `emitida`, conservando el documento; facturas pagadas no se eliminan |
 

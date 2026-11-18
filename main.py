@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import io
 import json
 import math
 import os
@@ -13,7 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import jwt
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
+from generador_pdf import generar_factura_pdf
 from werkzeug.exceptions import HTTPException, MethodNotAllowed
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -308,10 +310,14 @@ def token_requerido(func_o_roles=None, roles=None):
                     or not separador
                     or not token.strip()
                 ):
-                    return (
-                        jsonify({"error": "Se requiere un token Bearer válido"}),
-                        401,
-                    )
+                    token_query = request.args.get("token", "").strip()
+                    if token_query:
+                        token = token_query
+                    else:
+                        return (
+                            jsonify({"error": "Se requiere un token Bearer válido"}),
+                            401,
+                        )
 
                 try:
                     payload = jwt.decode(
@@ -1682,6 +1688,68 @@ def consultar_factura_formato_estandar(factura_id):
     }
 
     return jsonify(documento_electronico_json), 200
+
+
+@app.route("/facturas/<int:factura_id>/pdf", methods=["GET"])
+@token_requerido
+def descargar_factura_pdf_endpoint(factura_id):
+    """
+    Genera y entrega la factura oficial en formato PDF de alta fidelidad,
+    diseñada para clientes del común (clara, profesional, sin códigos técnicos).
+    """
+    conn = get_db()
+    try:
+        consulta = "SELECT * FROM facturas WHERE id = ?"
+        valores = [factura_id]
+        if request.usuario_actual.get("rol") != "admin":
+            consulta += " AND creado_por = ?"
+            valores.append(request.usuario_actual.get("user", ""))
+        fila = conn.execute(consulta, valores).fetchone()
+        if not fila:
+            return jsonify({"error": "No existe una factura con ese id"}), 404
+
+        factura = formatear_factura(dict(fila))
+        pago_info = None
+        if factura.get("pago_id"):
+            pago_fila = conn.execute(
+                "SELECT id, cliente, monto, moneda, metodo_pago, estado, fecha_creacion FROM pagos WHERE id = ?",
+                (factura["pago_id"],),
+            ).fetchone()
+            if pago_fila:
+                pago_info = dict(pago_fila)
+    finally:
+        conn.close()
+
+    empresa_info = {
+        "nombre": os.environ.get(
+            "EMPRESA_NOMBRE", "Pasarela de Pagos Global S.A.S."
+        ),
+        "nit": os.environ.get("EMPRESA_NIT", "901.876.543-1"),
+        "email": os.environ.get(
+            "EMPRESA_EMAIL", "facturacion@pasarela.local"
+        ),
+        "ciudad": os.environ.get("EMPRESA_CIUDAD", "Bogotá, Colombia"),
+        "telefono": "+57 (601) 800-PAGO",
+        "web": "https://pasarela.local",
+    }
+
+    pdf_bytes = generar_factura_pdf(
+        factura,
+        pago=pago_info,
+        empresa_info=empresa_info,
+        secret_key=app.config.get("SECRET_KEY", ""),
+    )
+
+    es_descarga = request.args.get("descargar", "0").lower() in ("1", "true", "si")
+    num_factura = factura.get("numero_factura", f"FAC-{factura_id}")
+    nombre_archivo = f"Factura_{num_factura}.pdf"
+
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=es_descarga,
+        download_name=nombre_archivo,
+    )
 
 
 @app.route("/facturas/<int:factura_id>/estado", methods=["PATCH"])

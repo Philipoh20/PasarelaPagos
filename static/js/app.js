@@ -447,7 +447,10 @@ function configurarEventosUI() {
   // Divisas
   document.getElementById('form-divisas-convertir')?.addEventListener('submit', convertirMontoDivisas);
 
-  // Visor JSON
+  // Visor Factura & PDF
+  document.getElementById('btn-descargar-pdf')?.addEventListener('click', descargarFacturaPDFActual);
+  document.getElementById('btn-imprimir-pdf')?.addEventListener('click', imprimirFacturaPDFActual);
+  document.getElementById('btn-toggle-json')?.addEventListener('click', alternarVistaVisorFactura);
   document.getElementById('btn-copiar-visor')?.addEventListener('click', () => {
     copiarTexto(document.getElementById('visor-json-content').innerText, 'Factura JSON copiada al portapapeles');
   });
@@ -892,7 +895,10 @@ function renderizarTablaFacturas(facturas) {
       <td class="text-right">
         <div class="table-actions">
           <button type="button" class="btn-table-action" onclick="verFacturaFormatoEstandar(${f.id})">
-            VER JSON
+            VER FACTURA
+          </button>
+          <button type="button" class="btn-table-action" onclick="descargarFacturaPDFDirecto(${f.id}, '${f.numero_factura}')" title="Descargar PDF">
+            PDF
           </button>
           ${esAdmin && f.estado === 'emitida' ? `
             <button type="button" class="btn-table-action delete" onclick="confirmarAnularFactura(${f.id})">
@@ -1121,34 +1127,251 @@ async function guardarNuevaFactura(e) {
 
   if (res.ok && res.data) {
     cerrarModal('modal-factura');
-    lanzarToast('success', 'FACTURA EMITIDA', `Factura #${res.data.numero_factura} emitida en formato JSON.`);
+    lanzarToast('success', 'FACTURA EMITIDA', `Factura #${res.data.numero_factura} emitida con éxito en formato PDF.`);
     await cargarFacturas();
     await cargarDashboard();
-    // Abrir de inmediato el visor oficial para ver los efectos y la firma SHA-256 (UI03)
+    // Abrir de inmediato el visor oficial para ver la factura y descargar el PDF
     verFacturaFormatoEstandar(res.data.id);
   } else {
     lanzarToast('error', 'ERROR EN FACTURA', res.data?.error || 'No se pudo emitir la factura.');
   }
 }
 
+function renderizarVistaFacturaCliente(data) {
+  const enc = data.encabezado || {};
+  const emisor = data.emisor || {};
+  const rec = data.receptor || {};
+  const pago = data.pago_asociado;
+  const lineas = data.lineas_detalle || [];
+  const totales = data.resumen_impuestos_y_totales || {};
+  const auditoria = data.metadatos_auditoria || {};
+  const moneda = enc.moneda || 'COP';
+
+  const estado = (enc.estado || 'emitida').toLowerCase();
+  const estadoEtiqueta = estado === 'pagada' ? 'PAGADA' : (estado === 'anulada' ? 'ANULADA' : 'EMITIDA');
+
+  let filasItems = '';
+  if (lineas.length === 0) {
+    filasItems = `
+      <tr>
+        <td class="text-center">1</td>
+        <td><strong>Servicio de procesamiento de pago comercial</strong></td>
+        <td class="text-center">1</td>
+        <td class="text-right">${formatearMoneda(totales.subtotal, moneda)}</td>
+        <td class="text-right"><strong>${formatearMoneda(totales.subtotal, moneda)}</strong></td>
+      </tr>
+    `;
+  } else {
+    filasItems = lineas.map((item, idx) => `
+      <tr>
+        <td class="text-center">${idx + 1}</td>
+        <td><strong>${escaparHTML(item.descripcion)}</strong></td>
+        <td class="text-center">${item.cantidad}</td>
+        <td class="text-right">${formatearMoneda(item.precio_unitario, moneda)}</td>
+        <td class="text-right"><strong>${formatearMoneda(item.subtotal, moneda)}</strong></td>
+      </tr>
+    `).join('');
+  }
+
+  let bloqueConversion = '';
+  if (totales.conversion_divisa) {
+    const conv = totales.conversion_divisa;
+    bloqueConversion = `
+      <div class="invoice-conversion-box">
+        <div class="invoice-conversion-title">✓ Conversión de Moneda Aplicada:</div>
+        <div>Liquidado a partir de pago original en <strong>${escaparHTML(conv.moneda_origen)}</strong> con tasa de cambio oficial de <strong>1 ${escaparHTML(conv.moneda_origen)} = ${conv.tasa} ${escaparHTML(conv.moneda_destino)}</strong>. (Fuente: ${escaparHTML(conv.fuente || 'Oficial')} ${escaparHTML(conv.fecha_tasa || '')}).</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="invoice-header-grid">
+      <div>
+        <div class="invoice-brand-title">${escaparHTML(emisor.razon_social || 'Pasarela de Pagos Global S.A.S.')}</div>
+        <div class="invoice-brand-sub">
+          NIT: ${escaparHTML(emisor.nit || '901.876.543-1')} · Régimen Común<br/>
+          Dirección: ${escaparHTML(emisor.ciudad || 'Bogotá, Colombia')}<br/>
+          Correo: ${escaparHTML(emisor.email || 'facturacion@pasarela.local')}
+        </div>
+      </div>
+      <div class="invoice-number-block">
+        <div class="invoice-doc-title">FACTURA DE VENTA</div>
+        <div class="invoice-doc-num">${escaparHTML(enc.numero_factura)}</div>
+        <div class="invoice-doc-date">Fecha de Emisión: ${escaparHTML(enc.fecha_emision)}</div>
+        <span class="invoice-status-badge ${estado}">${estadoEtiqueta}</span>
+      </div>
+    </div>
+
+    <div class="invoice-cards-row">
+      <div class="invoice-card">
+        <div class="invoice-card-header">Facturado a (Cliente)</div>
+        <div class="invoice-card-client">${escaparHTML(rec.nombre || 'Cliente General')}</div>
+        <div class="invoice-card-line"><strong>Identificación / NIT:</strong> ${escaparHTML(rec.documento_identidad || 'No registrado')}</div>
+        <div class="invoice-card-line"><strong>Correo Electrónico:</strong> ${escaparHTML(rec.email || 'No registrado')}</div>
+      </div>
+      <div class="invoice-card">
+        <div class="invoice-card-header">Detalles de la Transacción</div>
+        <div class="invoice-card-line"><strong>Método de Pago:</strong> ${escaparHTML(pago?.metodo_pago ? String(pago.metodo_pago).toUpperCase() : 'DIRECTO / EN LÍNEA')}</div>
+        <div class="invoice-card-line"><strong>Transacción / Ref:</strong> ${pago?.id ? '#' + pago.id : 'Venta Directa'}</div>
+        <div class="invoice-card-line"><strong>Moneda de Facturación:</strong> ${escaparHTML(moneda)}</div>
+      </div>
+    </div>
+
+    <div class="invoice-table-wrapper">
+      <table class="invoice-table">
+        <thead>
+          <tr>
+            <th class="text-center" style="width: 44px;">#</th>
+            <th>Descripción del Concepto o Servicio</th>
+            <th class="text-center" style="width: 70px;">Cant.</th>
+            <th class="text-right" style="width: 140px;">Precio Unit.</th>
+            <th class="text-right" style="width: 140px;">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filasItems}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="invoice-bottom-grid">
+      <div>
+        ${bloqueConversion}
+        <div class="invoice-notes">
+          <strong>Información Importante:</strong><br/>
+          • Este comprobante certifica la prestación de los conceptos y servicios detallados anteriormente.<br/>
+          • Conserve este documento como soporte para efectos de control, garantía y registro contable.
+        </div>
+      </div>
+      <div class="invoice-totals-card">
+        <div class="invoice-total-row">
+          <span>Subtotal:</span>
+          <strong>${formatearMoneda(totales.subtotal, moneda)}</strong>
+        </div>
+        <div class="invoice-total-row">
+          <span>IVA (${escaparHTML(totales.tasa_impuesto || '0%')}):</span>
+          <strong>${formatearMoneda(totales.valor_impuesto, moneda)}</strong>
+        </div>
+        <div class="invoice-total-row grand-total">
+          <span>TOTAL A PAGAR:</span>
+          <strong>${formatearMoneda(totales.total_a_pagar, moneda)}</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="invoice-seal-box">
+      <div><strong>Sello Digital de Autenticidad SHA-256:</strong></div>
+      <div class="invoice-seal-hash">${escaparHTML(auditoria?.hash_integridad_sha256 || '')}</div>
+      <div style="margin-top: 4px;">Documento oficial inalterable emitido por <strong>${escaparHTML(auditoria?.creado_por || 'sistema')}</strong>.</div>
+    </div>
+  `;
+}
+
 async function verFacturaFormatoEstandar(facturaId) {
   const res = await apiFetch(`/facturas/${facturaId}/json`);
   if (!res.ok || !res.data) {
-    lanzarToast('error', 'ERROR VISOR', res.data?.error || 'No se pudo cargar el JSON de la factura.');
+    lanzarToast('error', 'ERROR VISOR', res.data?.error || 'No se pudo cargar la información de la factura.');
     return;
   }
 
   const data = res.data;
+  AppState.facturaVisualizadaId = facturaId;
+  AppState.facturaVisualizada = data;
+
   document.getElementById('visor-numero-factura').textContent = `FACTURA #${data.encabezado.numero_factura}`;
   document.getElementById('visor-tipo-doc').textContent =
-    `${data.encabezado.tipo_documento.toUpperCase()} // FIRMA SHA-256 VERIFICADA`;
+    `COMPROBANTE OFICIAL DE VENTA · FORMATO PDF // SHA-256 VERIFICADO`;
 
+  // Renderizar la vista para el cliente
+  const contenedorVista = document.getElementById('visor-vista-factura');
+  if (contenedorVista) {
+    contenedorVista.innerHTML = renderizarVistaFacturaCliente(data);
+    contenedorVista.classList.remove('hidden');
+  }
+
+  // Cargar contenido en el visor técnico (oculto por defecto)
   const codeEl = document.getElementById('visor-json-content');
   if (codeEl) {
     codeEl.innerHTML = colorearSintaxisJSON(JSON.stringify(data, null, 2));
   }
+  const vistaJson = document.getElementById('visor-vista-json');
+  if (vistaJson) {
+    vistaJson.classList.add('hidden');
+  }
+
+  const btnToggle = document.getElementById('btn-toggle-json');
+  if (btnToggle) {
+    btnToggle.textContent = 'VER JSON';
+  }
+  document.getElementById('btn-copiar-visor')?.classList.add('hidden');
+  document.getElementById('btn-descargar-json')?.classList.add('hidden');
 
   abrirModal('modal-visor-json');
+}
+
+async function descargarFacturaPDFDirecto(facturaId, numeroFactura) {
+  try {
+    lanzarToast('info', 'GENERANDO PDF', 'Preparando documento PDF de alta fidelidad...');
+    const res = await fetch(`/facturas/${facturaId}/pdf?descargar=1`, {
+      headers: {
+        'Authorization': `Bearer ${AppState.token}`
+      }
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error || 'No se pudo generar el archivo PDF.');
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Factura_${numeroFactura || facturaId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    lanzarToast('success', 'PDF DESCARGADO', `Factura #${numeroFactura} descargada con éxito.`);
+  } catch (err) {
+    lanzarToast('error', 'ERROR DESCARGA', err.message || 'Error al descargar la factura en PDF.');
+  }
+}
+
+function descargarFacturaPDFActual() {
+  if (!AppState.facturaVisualizadaId) return;
+  const num = AppState.facturaVisualizada?.encabezado?.numero_factura || AppState.facturaVisualizadaId;
+  descargarFacturaPDFDirecto(AppState.facturaVisualizadaId, num);
+}
+
+function imprimirFacturaPDFActual() {
+  if (!AppState.facturaVisualizadaId) return;
+  const url = `/facturas/${AppState.facturaVisualizadaId}/pdf?token=${encodeURIComponent(AppState.token)}`;
+  window.open(url, '_blank');
+}
+
+function alternarVistaVisorFactura() {
+  const vistaFactura = document.getElementById('visor-vista-factura');
+  const vistaJson = document.getElementById('visor-vista-json');
+  const btnToggle = document.getElementById('btn-toggle-json');
+  const btnCopiar = document.getElementById('btn-copiar-visor');
+  const btnDescargarJson = document.getElementById('btn-descargar-json');
+
+  if (vistaJson && vistaFactura && btnToggle) {
+    if (vistaJson.classList.contains('hidden')) {
+      vistaJson.classList.remove('hidden');
+      vistaFactura.classList.add('hidden');
+      btnToggle.textContent = 'VER FACTURA';
+      btnCopiar?.classList.remove('hidden');
+      btnDescargarJson?.classList.remove('hidden');
+    } else {
+      vistaJson.classList.add('hidden');
+      vistaFactura.classList.remove('hidden');
+      btnToggle.textContent = 'VER JSON';
+      btnCopiar?.classList.add('hidden');
+      btnDescargarJson?.classList.add('hidden');
+    }
+  }
 }
 
 function confirmarAnularFactura(facturaId) {
